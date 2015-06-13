@@ -98,6 +98,7 @@
 
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/pmc551.h>
+#include <linux/mtd/compatmac.h>
 
 static struct mtd_info *pmc551list;
 
@@ -351,7 +352,7 @@ static int pmc551_write(struct mtd_info *mtd, loff_t to, size_t len,
  * Fixup routines for the V370PDC
  * PCI device ID 0x020011b0
  *
- * This function basically kick starts the DRAM oboard the card and gets it
+ * This function basicly kick starts the DRAM oboard the card and gets it
  * ready to be used.  Before this is done the device reads VERY erratic, so
  * much that it can crash the Linux 2.2.x series kernels when a user cat's
  * /proc/pci .. though that is mainly a kernel bug in handling the PCI DEVSEL
@@ -540,7 +541,7 @@ static u32 fixup_pmc551(struct pci_dev *dev)
 
 	/*
 	 * Check to make certain the DEVSEL is set correctly, this device
-	 * has a tendency to assert DEVSEL and TRDY when a write is performed
+	 * has a tendancy to assert DEVSEL and TRDY when a write is performed
 	 * to the memory when memory is read-only
 	 */
 	if ((cmd & PCI_STATUS_DEVSEL_MASK) != 0x0) {
@@ -667,7 +668,7 @@ static int __init init_pmc551(void)
 {
 	struct pci_dev *PCI_Device = NULL;
 	struct mypriv *priv;
-	int found = 0;
+	int count, found = 0;
 	struct mtd_info *mtd;
 	u32 length = 0;
 
@@ -694,7 +695,7 @@ static int __init init_pmc551(void)
 	/*
 	 * PCU-bus chipset probe.
 	 */
-	for (;;) {
+	for (count = 0; count < MAX_MTD_DEVICES; count++) {
 
 		if ((PCI_Device = pci_get_device(PCI_VENDOR_ID_V3_SEMI,
 						  PCI_DEVICE_ID_V3_SEMI_V370PDC,

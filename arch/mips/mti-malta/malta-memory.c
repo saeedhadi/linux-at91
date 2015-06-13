@@ -43,7 +43,7 @@ static struct prom_pmemblock mdesc[PROM_MAX_PMEMBLOCKS];
 static char *mtypes[3] = {
 	"Dont use memory",
 	"YAMON PROM memory",
-	"Free memory",
+	"Free memmory",
 };
 #endif
 
@@ -54,8 +54,7 @@ static struct prom_pmemblock * __init prom_getmdesc(void)
 {
 	char *memsize_str;
 	unsigned int memsize;
-	char *ptr;
-	static char cmdline[COMMAND_LINE_SIZE] __initdata;
+	char cmdline[CL_SIZE], *ptr;
 
 	/* otherwise look in the environment */
 	memsize_str = prom_getenv("memsize");

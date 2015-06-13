@@ -6,10 +6,8 @@
 #include <linux/acpi.h>
 #include <linux/bcd.h>
 #include <linux/pnp.h>
-#include <linux/of.h>
 
 #include <asm/vsyscall.h>
-#include <asm/x86_init.h>
 #include <asm/time.h>
 
 #ifdef CONFIG_X86_32
@@ -77,7 +75,7 @@ int mach_set_rtc_mmss(unsigned long nowtime)
 		CMOS_WRITE(real_seconds, RTC_SECONDS);
 		CMOS_WRITE(real_minutes, RTC_MINUTES);
 	} else {
-		printk_once(KERN_NOTICE
+		printk(KERN_WARNING
 		       "set_rtc_mmss: can't update from %d to %d\n",
 		       cmos_minutes, real_minutes);
 		retval = -1;
@@ -167,29 +165,33 @@ void rtc_cmos_write(unsigned char val, unsigned char addr)
 }
 EXPORT_SYMBOL(rtc_cmos_write);
 
-int update_persistent_clock(struct timespec now)
+static int set_rtc_mmss(unsigned long nowtime)
 {
 	unsigned long flags;
 	int retval;
 
 	spin_lock_irqsave(&rtc_lock, flags);
-	retval = x86_platform.set_wallclock(now.tv_sec);
+	retval = set_wallclock(nowtime);
 	spin_unlock_irqrestore(&rtc_lock, flags);
 
 	return retval;
 }
 
 /* not static: needed by APM */
-void read_persistent_clock(struct timespec *ts)
+unsigned long read_persistent_clock(void)
 {
 	unsigned long retval, flags;
 
 	spin_lock_irqsave(&rtc_lock, flags);
-	retval = x86_platform.get_wallclock();
+	retval = get_wallclock();
 	spin_unlock_irqrestore(&rtc_lock, flags);
 
-	ts->tv_sec = retval;
-	ts->tv_nsec = 0;
+	return retval;
+}
+
+int update_persistent_clock(struct timespec now)
+{
+	return set_rtc_mmss(now.tv_sec);
 }
 
 unsigned long long native_read_tsc(void)
@@ -237,8 +239,6 @@ static __init int add_rtc_cmos(void)
 		}
 	}
 #endif
-	if (of_have_populated_dt())
-		return 0;
 
 	platform_device_register(&rtc_device);
 	dev_info(&rtc_device.dev,

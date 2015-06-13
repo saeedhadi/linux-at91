@@ -69,6 +69,7 @@ struct snd_at73c213 {
 	int				irq;
 	int				period;
 	unsigned long			bitrate;
+	struct clk			*bitclk;
 	struct ssc_device		*ssc;
 	struct spi_device		*spi;
 	u8				spi_wbuffer[2];
@@ -113,7 +114,11 @@ snd_at73c213_write_reg(struct snd_at73c213 *chip, u8 reg, u8 val)
 static struct snd_pcm_hardware snd_at73c213_playback_hw = {
 	.info		= SNDRV_PCM_INFO_INTERLEAVED |
 			  SNDRV_PCM_INFO_BLOCK_TRANSFER,
+#ifdef __BIG_ENDIAN
 	.formats	= SNDRV_PCM_FMTBIT_S16_BE,
+#else
+	.formats	= SNDRV_PCM_FMTBIT_S16_LE,
+#endif
 	.rates		= SNDRV_PCM_RATE_CONTINUOUS,
 	.rate_min	= 8000,  /* Replaced by chip->bitrate later. */
 	.rate_max	= 50000, /* Replaced by chip->bitrate later. */
@@ -155,7 +160,7 @@ static int snd_at73c213_set_bitrate(struct snd_at73c213 *chip)
 	if (max_tries < 1)
 		max_tries = 1;
 
-	/* ssc_div must be even. */
+	/* ssc_div must be a power of 2. */
 	ssc_div = (ssc_div + 1) & ~1UL;
 
 	if ((ssc_rate / (ssc_div * 2 * 16)) < BITRATE_MIN) {

@@ -27,13 +27,10 @@
 #include "linux/init.h"
 #include "linux/cdrom.h"
 #include "linux/proc_fs.h"
-#include "linux/seq_file.h"
 #include "linux/ctype.h"
 #include "linux/capability.h"
 #include "linux/mm.h"
-#include "linux/slab.h"
 #include "linux/vmalloc.h"
-#include "linux/mutex.h"
 #include "linux/blkpg.h"
 #include "linux/genhd.h"
 #include "linux/spinlock.h"
@@ -100,7 +97,6 @@ static inline void ubd_set_bit(__u64 bit, unsigned char *data)
 #define DRIVER_NAME "uml-blkdev"
 
 static DEFINE_MUTEX(ubd_lock);
-static DEFINE_MUTEX(ubd_mutex); /* replaces BKL, might not be needed */
 
 static int ubd_open(struct block_device *bdev, fmode_t mode);
 static int ubd_release(struct gendisk *disk, fmode_t mode);
@@ -110,7 +106,7 @@ static int ubd_getgeo(struct block_device *bdev, struct hd_geometry *geo);
 
 #define MAX_DEV (16)
 
-static const struct block_device_operations ubd_blops = {
+static struct block_device_operations ubd_blops = {
         .owner		= THIS_MODULE,
         .open		= ubd_open,
         .release	= ubd_release,
@@ -164,7 +160,6 @@ struct ubd {
 	struct scatterlist sg[MAX_SG];
 	struct request *request;
 	int start_sg, end_sg;
-	sector_t rq_pos;
 };
 
 #define DEFAULT_COW { \
@@ -185,11 +180,10 @@ struct ubd {
 	.no_cow =               0, \
 	.shared =		0, \
 	.cow =			DEFAULT_COW, \
-	.lock =			__SPIN_LOCK_UNLOCKED(ubd_devs.lock), \
+	.lock =			SPIN_LOCK_UNLOCKED,	\
 	.request =		NULL, \
 	.start_sg =		0, \
 	.end_sg =		0, \
-	.rq_pos =		0, \
 }
 
 /* Protected by ubd_lock */
@@ -206,24 +200,22 @@ static void make_proc_ide(void)
 	proc_ide = proc_mkdir("ide0", proc_ide_root);
 }
 
-static int fake_ide_media_proc_show(struct seq_file *m, void *v)
+static int proc_ide_read_media(char *page, char **start, off_t off, int count,
+			       int *eof, void *data)
 {
-	seq_puts(m, "disk\n");
-	return 0;
-}
+	int len;
 
-static int fake_ide_media_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, fake_ide_media_proc_show, NULL);
+	strcpy(page, "disk\n");
+	len = strlen("disk\n");
+	len -= off;
+	if (len < count){
+		*eof = 1;
+		if (len <= 0) return 0;
+	}
+	else len = count;
+	*start = page + off;
+	return len;
 }
-
-static const struct file_operations fake_ide_media_proc_fops = {
-	.owner		= THIS_MODULE,
-	.open		= fake_ide_media_proc_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
 
 static void make_ide_entries(const char *dev_name)
 {
@@ -235,8 +227,11 @@ static void make_ide_entries(const char *dev_name)
 	dir = proc_mkdir(dev_name, proc_ide);
 	if(!dir) return;
 
-	ent = proc_create("media", S_IRUGO, dir, &fake_ide_media_proc_fops);
+	ent = create_proc_entry("media", S_IFREG|S_IRUGO, dir);
 	if(!ent) return;
+	ent->data = NULL;
+	ent->read_proc = proc_ide_read_media;
+	ent->write_proc = NULL;
 	snprintf(name, sizeof(name), "ide0/%s", dev_name);
 	proc_symlink(dev_name, proc_ide_root, name);
 }
@@ -456,6 +451,23 @@ static void do_ubd_request(struct request_queue * q);
 
 /* Only changed by ubd_init, which is an initcall. */
 static int thread_fd = -1;
+
+static void ubd_end_request(struct request *req, int bytes, int error)
+{
+	blk_end_request(req, error, bytes);
+}
+
+/* Callable only from interrupt context - otherwise you need to do
+ * spin_lock_irq()/spin_lock_irqsave() */
+static inline void ubd_finish(struct request *req, int bytes)
+{
+	if(bytes < 0){
+		ubd_end_request(req, 0, -EIO);
+		return;
+	}
+	ubd_end_request(req, bytes, 0);
+}
+
 static LIST_HEAD(restart);
 
 /* XXX - move this inside ubd_intr. */
@@ -463,6 +475,7 @@ static LIST_HEAD(restart);
 static void ubd_handler(void)
 {
 	struct io_thread_req *req;
+	struct request *rq;
 	struct ubd *ubd;
 	struct list_head *list, *next_ele;
 	unsigned long flags;
@@ -479,7 +492,10 @@ static void ubd_handler(void)
 			return;
 		}
 
-		blk_end_request(req->req, 0, req->length);
+		rq = req->req;
+		rq->nr_sectors -= req->length >> 9;
+		if(rq->nr_sectors == 0)
+			ubd_finish(rq, rq->hard_nr_sectors << 9);
 		kfree(req);
 	}
 	reactivate_fd(thread_fd, UBD_IRQ);
@@ -752,7 +768,7 @@ static int ubd_open_dev(struct ubd *ubd_dev)
 	ubd_dev->fd = fd;
 
 	if(ubd_dev->cow.file != NULL){
-		blk_queue_max_hw_sectors(ubd_dev->queue, 8 * sizeof(long));
+		blk_queue_max_sectors(ubd_dev->queue, 8 * sizeof(long));
 
 		err = -ENOMEM;
 		ubd_dev->cow.bitmap = vmalloc(ubd_dev->cow.bitmap_len);
@@ -783,7 +799,7 @@ static int ubd_open_dev(struct ubd *ubd_dev)
 
 static void ubd_device_release(struct device *dev)
 {
-	struct ubd *ubd_dev = dev_get_drvdata(dev);
+	struct ubd *ubd_dev = dev->driver_data;
 
 	blk_cleanup_queue(ubd_dev->queue);
 	*ubd_dev = ((struct ubd) DEFAULT_UBD);
@@ -812,7 +828,7 @@ static int ubd_disk_register(int major, u64 size, int unit,
 		ubd_devs[unit].pdev.id   = unit;
 		ubd_devs[unit].pdev.name = DRIVER_NAME;
 		ubd_devs[unit].pdev.dev.release = ubd_device_release;
-		dev_set_drvdata(&ubd_devs[unit].pdev.dev, &ubd_devs[unit]);
+		ubd_devs[unit].pdev.dev.driver_data = &ubd_devs[unit];
 		platform_device_register(&ubd_devs[unit].pdev);
 		disk->driverfs_dev = &ubd_devs[unit].pdev.dev;
 	}
@@ -854,7 +870,7 @@ static int ubd_add(int n, char **error_out)
 	}
 	ubd_dev->queue->queuedata = ubd_dev;
 
-	blk_queue_max_segments(ubd_dev->queue, MAX_SG);
+	blk_queue_max_hw_segments(ubd_dev->queue, MAX_SG);
 	err = ubd_disk_register(UBD_MAJOR, ubd_dev->size, n, &ubd_gendisk[n]);
 	if(err){
 		*error_out = "Failed to register device";
@@ -1102,7 +1118,6 @@ static int ubd_open(struct block_device *bdev, fmode_t mode)
 	struct ubd *ubd_dev = disk->private_data;
 	int err = 0;
 
-	mutex_lock(&ubd_mutex);
 	if(ubd_dev->count == 0){
 		err = ubd_open_dev(ubd_dev);
 		if(err){
@@ -1120,8 +1135,7 @@ static int ubd_open(struct block_device *bdev, fmode_t mode)
 	        if(--ubd_dev->count == 0) ubd_close_dev(ubd_dev);
 	        err = -EROFS;
 	}*/
-out:
-	mutex_unlock(&ubd_mutex);
+ out:
 	return err;
 }
 
@@ -1129,10 +1143,8 @@ static int ubd_release(struct gendisk *disk, fmode_t mode)
 {
 	struct ubd *ubd_dev = disk->private_data;
 
-	mutex_lock(&ubd_mutex);
 	if(--ubd_dev->count == 0)
 		ubd_close_dev(ubd_dev);
-	mutex_unlock(&ubd_mutex);
 	return 0;
 }
 
@@ -1231,25 +1243,27 @@ static void do_ubd_request(struct request_queue *q)
 {
 	struct io_thread_req *io_req;
 	struct request *req;
-	int n;
+	int n, last_sectors;
 
 	while(1){
 		struct ubd *dev = q->queuedata;
 		if(dev->end_sg == 0){
-			struct request *req = blk_fetch_request(q);
+			struct request *req = elv_next_request(q);
 			if(req == NULL)
 				return;
 
 			dev->request = req;
-			dev->rq_pos = blk_rq_pos(req);
+			blkdev_dequeue_request(req);
 			dev->start_sg = 0;
 			dev->end_sg = blk_rq_map_sg(q, req, dev->sg);
 		}
 
 		req = dev->request;
+		last_sectors = 0;
 		while(dev->start_sg < dev->end_sg){
 			struct scatterlist *sg = &dev->sg[dev->start_sg];
 
+			req->sector += last_sectors;
 			io_req = kmalloc(sizeof(struct io_thread_req),
 					 GFP_ATOMIC);
 			if(io_req == NULL){
@@ -1258,9 +1272,10 @@ static void do_ubd_request(struct request_queue *q)
 				return;
 			}
 			prepare_request(req, io_req,
-					(unsigned long long)dev->rq_pos << 9,
+					(unsigned long long) req->sector << 9,
 					sg->offset, sg->length, sg_page(sg));
 
+			last_sectors = sg->length >> 9;
 			n = os_write_file(thread_fd, &io_req,
 					  sizeof(struct io_thread_req *));
 			if(n != sizeof(struct io_thread_req *)){
@@ -1273,7 +1288,6 @@ static void do_ubd_request(struct request_queue *q)
 				return;
 			}
 
-			dev->rq_pos += sg->length >> 9;
 			dev->start_sg++;
 		}
 		dev->end_sg = 0;

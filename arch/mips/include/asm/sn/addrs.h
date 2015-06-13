@@ -11,7 +11,6 @@
 
 
 #ifndef __ASSEMBLY__
-#include <linux/smp.h>
 #include <linux/types.h>
 #endif /* !__ASSEMBLY__ */
 

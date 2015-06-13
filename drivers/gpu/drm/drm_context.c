@@ -333,7 +333,15 @@ int drm_addctx(struct drm_device *dev, void *data,
 		return -ENOMEM;
 	}
 
-	ctx_entry = kmalloc(sizeof(*ctx_entry), GFP_KERNEL);
+	if (ctx->handle != DRM_KERNEL_CONTEXT) {
+		if (dev->driver->context_ctor)
+			if (!dev->driver->context_ctor(dev, ctx->handle)) {
+				DRM_DEBUG("Running out of ctxs or memory.\n");
+				return -ENOMEM;
+			}
+	}
+
+	ctx_entry = drm_alloc(sizeof(*ctx_entry), DRM_MEM_CTXLIST);
 	if (!ctx_entry) {
 		DRM_DEBUG("out of memory\n");
 		return -ENOMEM;
@@ -448,7 +456,7 @@ int drm_rmctx(struct drm_device *dev, void *data,
 		list_for_each_entry_safe(pos, n, &dev->ctxlist, head) {
 			if (pos->handle == ctx->handle) {
 				list_del(&pos->head);
-				kfree(pos);
+				drm_free(pos, sizeof(*pos), DRM_MEM_CTXLIST);
 				--dev->ctx_count;
 			}
 		}

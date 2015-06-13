@@ -18,18 +18,14 @@
 #include <linux/atmel-mci.h>
 
 #include <linux/fb.h>
-#include <video/atmel_lcdfb.h>
+#include <video/atmel_lcdc.h>
 
 #include <mach/board.h>
 #include <mach/gpio.h>
-#include <mach/atmel_lcdc.h>
 #include <mach/at91sam9g45.h>
 #include <mach/at91sam9g45_matrix.h>
 #include <mach/at91sam9_smc.h>
 #include <mach/at_hdmac.h>
-#include <mach/atmel-mci.h>
-
-#include <media/atmel-isi.h>
 
 #include "generic.h"
 
@@ -51,7 +47,7 @@ static struct resource hdmac_resources[] = {
 		.end	= AT91_BASE_SYS + AT91_DMA + SZ_512 - 1,
 		.flags	= IORESOURCE_MEM,
 	},
-	[1] = {
+	[2] = {
 		.start	= AT91SAM9G45_ID_DMA,
 		.end	= AT91SAM9G45_ID_DMA,
 		.flags	= IORESOURCE_IRQ,
@@ -415,6 +411,7 @@ static struct platform_device at91sam9g45_mmc1_device = {
 /* Consider only one slot : slot 0 */
 void __init at91_add_device_mci(short mmc_id, struct mci_platform_data *data)
 {
+	struct at_dma_slave	*atslave;
 
 	if (!data)
 		return;
@@ -424,16 +421,11 @@ void __init at91_add_device_mci(short mmc_id, struct mci_platform_data *data)
 		return;
 
 #if defined(CONFIG_AT_HDMAC) || defined(CONFIG_AT_HDMAC_MODULE)
-	{
-	struct at_dma_slave	*atslave;
-	struct mci_dma_data	*alt_atslave;
-
-	alt_atslave = kzalloc(sizeof(struct mci_dma_data), GFP_KERNEL);
-	atslave = &alt_atslave->sdata;
+	atslave = kzalloc(sizeof(struct at_dma_slave), GFP_KERNEL);
 
 	/* DMA slave channel configuration */
 	atslave->dma_dev = &at_hdmac_device.dev;
-	atslave->reg_width = AT_DMA_SLAVE_WIDTH_32BIT;
+	atslave->reg_width = DW_DMA_SLAVE_WIDTH_32BIT;
 	atslave->cfg = ATC_FIFOCFG_HALFFIFO
 			| ATC_SRC_H2SEL_HW | ATC_DST_H2SEL_HW;
 	atslave->ctrla = ATC_SCSIZE_16 | ATC_DCSIZE_16;
@@ -445,8 +437,7 @@ void __init at91_add_device_mci(short mmc_id, struct mci_platform_data *data)
 		atslave->cfg |= ATC_SRC_PER(AT_DMA_ID_MCI1)
 			      | ATC_DST_PER(AT_DMA_ID_MCI1);
 
-	data->dma_slave = alt_atslave;
-	}
+	data->dma_slave = atslave;
 #endif
 
 
@@ -594,7 +585,7 @@ static struct i2c_gpio_platform_data pdata_i2c0 = {
 	.sda_is_open_drain	= 1,
 	.scl_pin		= AT91_PIN_PA21,
 	.scl_is_open_drain	= 1,
-	.udelay			= 5,		/* ~100 kHz */
+	.udelay			= 2,		/* ~100 kHz */
 };
 
 static struct platform_device at91sam9g45_twi0_device = {
@@ -608,7 +599,7 @@ static struct i2c_gpio_platform_data pdata_i2c1 = {
 	.sda_is_open_drain	= 1,
 	.scl_pin		= AT91_PIN_PB11,
 	.scl_is_open_drain	= 1,
-	.udelay			= 5,		/* ~100 kHz */
+	.udelay			= 2,		/* ~100 kHz */
 };
 
 static struct platform_device at91sam9g45_twi1_device = {
@@ -875,70 +866,6 @@ void __init at91_add_device_ac97(struct ac97c_platform_data *data)
 void __init at91_add_device_ac97(struct ac97c_platform_data *data) {}
 #endif
 
-/* --------------------------------------------------------------------
- *  Image Sensor Interface
- * -------------------------------------------------------------------- */
-#if defined(CONFIG_VIDEO_ATMEL_ISI) || defined(CONFIG_VIDEO_ATMEL_ISI_MODULE)
-static u64 isi_dmamask = DMA_BIT_MASK(32);
-static struct isi_platform_data isi_data;
-
-struct resource isi_resources[] = {
-	[0] = {
-		.start	= AT91SAM9G45_BASE_ISI,
-		.end	= AT91SAM9G45_BASE_ISI + SZ_16K - 1,
-		.flags	= IORESOURCE_MEM,
-	},
-	[1] = {
-		.start	= AT91SAM9G45_ID_ISI,
-		.end	= AT91SAM9G45_ID_ISI,
-		.flags	= IORESOURCE_IRQ,
-	},
-};
-
-static struct platform_device at91sam9g45_isi_device = {
-	.name		= "atmel_isi",
-	.id		= 0,
-	.dev		= {
-			.dma_mask		= &isi_dmamask,
-			.coherent_dma_mask	= DMA_BIT_MASK(32),
-			.platform_data		= &isi_data,
-	},
-	.resource	= isi_resources,
-	.num_resources	= ARRAY_SIZE(isi_resources),
-};
-
-void __init at91_add_device_isi(struct isi_platform_data * data)
-{
-	struct platform_device *pdev;
-
-	if (!data)
-		return;
-	isi_data = *data;
-
-	at91_set_A_periph(AT91_PIN_PB20, 0);	/* ISI_D0 */
-	at91_set_A_periph(AT91_PIN_PB21, 0);	/* ISI_D1 */
-	at91_set_A_periph(AT91_PIN_PB22, 0);	/* ISI_D2 */
-	at91_set_A_periph(AT91_PIN_PB23, 0);	/* ISI_D3 */
-	at91_set_A_periph(AT91_PIN_PB24, 0);	/* ISI_D4 */
-	at91_set_A_periph(AT91_PIN_PB25, 0);	/* ISI_D5 */
-	at91_set_A_periph(AT91_PIN_PB26, 0);	/* ISI_D6 */
-	at91_set_A_periph(AT91_PIN_PB27, 0);	/* ISI_D7 */
-	at91_set_A_periph(AT91_PIN_PB28, 0);	/* ISI_PCK */
-	at91_set_A_periph(AT91_PIN_PB30, 0);	/* ISI_HSYNC */
-	at91_set_A_periph(AT91_PIN_PB29, 0);	/* ISI_VSYNC */
-	at91_set_B_periph(AT91_PIN_PB31, 0);	/* ISI_MCK (PCK1) */
-	at91_set_B_periph(AT91_PIN_PB8, 0);	/* ISI_PD8 */
-	at91_set_B_periph(AT91_PIN_PB9, 0);	/* ISI_PD9 */
-	at91_set_B_periph(AT91_PIN_PB10, 0);	/* ISI_PD10 */
-	at91_set_B_periph(AT91_PIN_PB11, 0);	/* ISI_PD11 */
-
-	pdev = &at91sam9g45_isi_device;
-	platform_device_register(pdev);
-}
-#else
-void __init at91_add_device_isi(struct isi_platform_data * data) { }
-#endif
-
 
 /* --------------------------------------------------------------------
  *  LCD Controller
@@ -1067,9 +994,9 @@ static struct platform_device at91sam9g45_tcb1_device = {
 static void __init at91_add_device_tc(void)
 {
 	/* this chip has one clock and irq for all six TC channels */
-	at91_clock_associate("tcb0_clk", &at91sam9g45_tcb0_device.dev, "t0_clk");
+	at91_clock_associate("tcb_clk", &at91sam9g45_tcb0_device.dev, "t0_clk");
 	platform_device_register(&at91sam9g45_tcb0_device);
-	at91_clock_associate("tcb1_clk", &at91sam9g45_tcb1_device.dev, "t0_clk");
+	at91_clock_associate("tcb_clk", &at91sam9g45_tcb1_device.dev, "t0_clk");
 	platform_device_register(&at91sam9g45_tcb1_device);
 }
 #else
@@ -1177,7 +1104,7 @@ static void __init at91_add_device_rtt(void)
  *  Watchdog
  * -------------------------------------------------------------------- */
 
-#if defined(CONFIG_AT91SAM9X_WATCHDOG) || defined(CONFIG_AT91SAM9X_WATCHDOG_MODULE)
+#if defined(CONFIG_AT91SAM9_WATCHDOG) || defined(CONFIG_AT91SAM9_WATCHDOG_MODULE)
 static struct platform_device at91sam9g45_wdt_device = {
 	.name		= "at91_wdt",
 	.id		= -1,

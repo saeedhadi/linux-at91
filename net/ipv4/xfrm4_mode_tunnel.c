@@ -4,7 +4,6 @@
  * Copyright (c) 2004-2006 Herbert Xu <herbert@gondor.apana.org.au>
  */
 
-#include <linux/gfp.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -29,7 +28,7 @@ static inline void ipip_ecn_decapsulate(struct sk_buff *skb)
  */
 static int xfrm4_mode_tunnel_output(struct xfrm_state *x, struct sk_buff *skb)
 {
-	struct dst_entry *dst = skb_dst(skb);
+	struct dst_entry *dst = skb->dst;
 	struct iphdr *top_iph;
 	int flags;
 
@@ -42,7 +41,7 @@ static int xfrm4_mode_tunnel_output(struct xfrm_state *x, struct sk_buff *skb)
 	top_iph->ihl = 5;
 	top_iph->version = 4;
 
-	top_iph->protocol = xfrm_af2proto(skb_dst(skb)->ops->family);
+	top_iph->protocol = xfrm_af2proto(skb->dst->ops->family);
 
 	/* DS disclosed */
 	top_iph->tos = INET_ECN_encapsulate(XFRM_MODE_SKB_CB(skb)->tos,
@@ -56,7 +55,7 @@ static int xfrm4_mode_tunnel_output(struct xfrm_state *x, struct sk_buff *skb)
 		0 : (XFRM_MODE_SKB_CB(skb)->frag_off & htons(IP_DF));
 	ip_select_ident(top_iph, dst->child, NULL);
 
-	top_iph->ttl = ip4_dst_hoplimit(dst->child);
+	top_iph->ttl = dst_metric(dst->child, RTAX_HOPLIMIT);
 
 	top_iph->saddr = x->props.saddr.a4;
 	top_iph->daddr = x->id.daddr.a4;

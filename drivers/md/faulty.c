@@ -30,7 +30,7 @@
  *
  * Different modes can be active at a time, but only
  * one can be set at array creation.  Others can be added later.
- * A mode can be one-shot or recurrent with the recurrence being
+ * A mode can be one-shot or recurrent with the recurrance being
  * once in every N requests.
  * The bottom 5 bits of the "layout" indicate the mode.  The
  * remainder indicate a period, or 0 for one-shot.
@@ -64,7 +64,6 @@
 #define MaxFault	50
 #include <linux/blkdev.h>
 #include <linux/raid/md_u.h>
-#include <linux/slab.h>
 #include "md.h"
 #include <linux/seq_file.h>
 
@@ -169,9 +168,10 @@ static void add_sector(conf_t *conf, sector_t start, int mode)
 		conf->nfaults = n+1;
 }
 
-static int make_request(mddev_t *mddev, struct bio *bio)
+static int make_request(struct request_queue *q, struct bio *bio)
 {
-	conf_t *conf = mddev->private;
+	mddev_t *mddev = q->queuedata;
+	conf_t *conf = (conf_t*)mddev->private;
 	int failit = 0;
 
 	if (bio_data_dir(bio) == WRITE) {
@@ -210,7 +210,7 @@ static int make_request(mddev_t *mddev, struct bio *bio)
 		}
 	}
 	if (failit) {
-		struct bio *b = bio_clone_mddev(bio, GFP_NOIO, mddev);
+		struct bio *b = bio_clone(bio, GFP_NOIO);
 		b->bi_bdev = conf->rdev->bdev;
 		b->bi_private = bio;
 		b->bi_end_io = faulty_fail;
@@ -224,7 +224,7 @@ static int make_request(mddev_t *mddev, struct bio *bio)
 
 static void status(struct seq_file *seq, mddev_t *mddev)
 {
-	conf_t *conf = mddev->private;
+	conf_t *conf = (conf_t*)mddev->private;
 	int n;
 
 	if ((n=atomic_read(&conf->counters[WriteTransient])) != 0)
@@ -255,14 +255,14 @@ static void status(struct seq_file *seq, mddev_t *mddev)
 }
 
 
-static int reshape(mddev_t *mddev)
+static int reconfig(mddev_t *mddev, int layout, int chunk_size)
 {
-	int mode = mddev->new_layout & ModeMask;
-	int count = mddev->new_layout >> ModeShift;
+	int mode = layout & ModeMask;
+	int count = layout >> ModeShift;
 	conf_t *conf = mddev->private;
 
-	if (mddev->new_layout < 0)
-		return 0;
+	if (chunk_size != -1)
+		return -EINVAL;
 
 	/* new layout */
 	if (mode == ClearFaults)
@@ -279,7 +279,6 @@ static int reshape(mddev_t *mddev)
 		atomic_set(&conf->counters[mode], count);
 	} else
 		return -EINVAL;
-	mddev->new_layout = -1;
 	mddev->layout = -1; /* makes sure further changes come through */
 	return 0;
 }
@@ -299,12 +298,8 @@ static int run(mddev_t *mddev)
 {
 	mdk_rdev_t *rdev;
 	int i;
-	conf_t *conf;
 
-	if (md_check_no_bitmap(mddev))
-		return -EINVAL;
-
-	conf = kmalloc(sizeof(*conf), GFP_KERNEL);
+	conf_t *conf = kmalloc(sizeof(*conf), GFP_KERNEL);
 	if (!conf)
 		return -ENOMEM;
 
@@ -320,14 +315,14 @@ static int run(mddev_t *mddev)
 	md_set_array_sectors(mddev, faulty_size(mddev, 0, 0));
 	mddev->private = conf;
 
-	reshape(mddev);
+	reconfig(mddev, mddev->layout, -1);
 
 	return 0;
 }
 
 static int stop(mddev_t *mddev)
 {
-	conf_t *conf = mddev->private;
+	conf_t *conf = (conf_t *)mddev->private;
 
 	kfree(conf);
 	mddev->private = NULL;
@@ -343,7 +338,7 @@ static struct mdk_personality faulty_personality =
 	.run		= run,
 	.stop		= stop,
 	.status		= status,
-	.check_reshape	= reshape,
+	.reconfig	= reconfig,
 	.size		= faulty_size,
 };
 
@@ -360,7 +355,6 @@ static void raid_exit(void)
 module_init(raid_init);
 module_exit(raid_exit);
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Fault injection personality for MD");
 MODULE_ALIAS("md-personality-10"); /* faulty */
 MODULE_ALIAS("md-faulty");
 MODULE_ALIAS("md-level--5");

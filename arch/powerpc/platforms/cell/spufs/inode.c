@@ -71,16 +71,10 @@ spufs_alloc_inode(struct super_block *sb)
 	return &ei->vfs_inode;
 }
 
-static void spufs_i_callback(struct rcu_head *head)
+static void
+spufs_destroy_inode(struct inode *inode)
 {
-	struct inode *inode = container_of(head, struct inode, i_rcu);
-	INIT_LIST_HEAD(&inode->i_dentry);
 	kmem_cache_free(spufs_inode_cache, SPUFS_I(inode));
-}
-
-static void spufs_destroy_inode(struct inode *inode)
-{
-	call_rcu(&inode->i_rcu, spufs_i_callback);
 }
 
 static void
@@ -116,9 +110,7 @@ spufs_setattr(struct dentry *dentry, struct iattr *attr)
 	if ((attr->ia_valid & ATTR_SIZE) &&
 	    (attr->ia_size != inode->i_size))
 		return -EINVAL;
-	setattr_copy(inode, attr);
-	mark_inode_dirty(inode);
-	return 0;
+	return inode_setattr(inode, attr);
 }
 
 
@@ -127,7 +119,7 @@ spufs_new_file(struct super_block *sb, struct dentry *dentry,
 		const struct file_operations *fops, int mode,
 		size_t size, struct spu_context *ctx)
 {
-	static const struct inode_operations spufs_file_iops = {
+	static struct inode_operations spufs_file_iops = {
 		.setattr = spufs_setattr,
 	};
 	struct inode *inode;
@@ -149,14 +141,15 @@ out:
 }
 
 static void
-spufs_evict_inode(struct inode *inode)
+spufs_delete_inode(struct inode *inode)
 {
 	struct spufs_inode_info *ei = SPUFS_I(inode);
-	end_writeback(inode);
+
 	if (ei->i_ctx)
 		put_spu_context(ei->i_ctx);
 	if (ei->i_gang)
 		put_spu_gang(ei->i_gang);
+	clear_inode(inode);
 }
 
 static void spufs_prune_dir(struct dentry *dir)
@@ -165,18 +158,18 @@ static void spufs_prune_dir(struct dentry *dir)
 
 	mutex_lock(&dir->d_inode->i_mutex);
 	list_for_each_entry_safe(dentry, tmp, &dir->d_subdirs, d_u.d_child) {
+		spin_lock(&dcache_lock);
 		spin_lock(&dentry->d_lock);
 		if (!(d_unhashed(dentry)) && dentry->d_inode) {
-			dget_dlock(dentry);
+			dget_locked(dentry);
 			__d_drop(dentry);
 			spin_unlock(&dentry->d_lock);
 			simple_unlink(dir->d_inode, dentry);
-			/* XXX: what was dcache_lock protecting here? Other
-			 * filesystems (IB, configfs) release dcache_lock
-			 * before unlink */
+			spin_unlock(&dcache_lock);
 			dput(dentry);
 		} else {
 			spin_unlock(&dentry->d_lock);
+			spin_unlock(&dcache_lock);
 		}
 	}
 	shrink_dcache_parent(dir);
@@ -258,7 +251,7 @@ const struct file_operations spufs_context_fops = {
 	.llseek		= dcache_dir_lseek,
 	.read		= generic_read_dir,
 	.readdir	= dcache_readdir,
-	.fsync		= noop_fsync,
+	.fsync		= simple_sync_file,
 };
 EXPORT_SYMBOL_GPL(spufs_context_fops);
 
@@ -638,6 +631,10 @@ long spufs_create(struct nameidata *nd, unsigned int flags, mode_t mode,
 	if (IS_ERR(dentry))
 		goto out_dir;
 
+	ret = -EEXIST;
+	if (dentry->d_inode)
+		goto out_dput;
+
 	mode &= ~current_umask();
 
 	if (flags & SPU_CREATE_GANG)
@@ -651,6 +648,8 @@ long spufs_create(struct nameidata *nd, unsigned int flags, mode_t mode,
 		fsnotify_mkdir(nd->path.dentry->d_inode, dentry);
 	return ret;
 
+out_dput:
+	dput(dentry);
 out_dir:
 	mutex_unlock(&nd->path.dentry->d_inode->i_mutex);
 out:
@@ -780,11 +779,12 @@ static int
 spufs_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct spufs_sb_info *info;
-	static const struct super_operations s_ops = {
+	static struct super_operations s_ops = {
 		.alloc_inode = spufs_alloc_inode,
 		.destroy_inode = spufs_destroy_inode,
 		.statfs = simple_statfs,
-		.evict_inode = spufs_evict_inode,
+		.delete_inode = spufs_delete_inode,
+		.drop_inode = generic_delete_inode,
 		.show_options = generic_show_options,
 	};
 
@@ -804,17 +804,17 @@ spufs_fill_super(struct super_block *sb, void *data, int silent)
 	return spufs_create_root(sb, data);
 }
 
-static struct dentry *
-spufs_mount(struct file_system_type *fstype, int flags,
-		const char *name, void *data)
+static int
+spufs_get_sb(struct file_system_type *fstype, int flags,
+		const char *name, void *data, struct vfsmount *mnt)
 {
-	return mount_single(fstype, flags, data, spufs_fill_super);
+	return get_sb_single(fstype, flags, data, spufs_fill_super, mnt);
 }
 
 static struct file_system_type spufs_type = {
 	.owner = THIS_MODULE,
 	.name = "spufs",
-	.mount = spufs_mount,
+	.get_sb = spufs_get_sb,
 	.kill_sb = kill_litter_super,
 };
 

@@ -22,38 +22,57 @@
 #include <linux/posix_acl_xattr.h>
 #include <linux/posix_acl.h>
 #include <linux/sched.h>
-#include <linux/slab.h>
 
 #include "ctree.h"
 #include "btrfs_inode.h"
 #include "xattr.h"
 
-#ifdef CONFIG_BTRFS_FS_POSIX_ACL
+#ifdef CONFIG_FS_POSIX_ACL
+
+static void btrfs_update_cached_acl(struct inode *inode,
+				    struct posix_acl **p_acl,
+				    struct posix_acl *acl)
+{
+	spin_lock(&inode->i_lock);
+	if (*p_acl && *p_acl != BTRFS_ACL_NOT_CACHED)
+		posix_acl_release(*p_acl);
+	*p_acl = posix_acl_dup(acl);
+	spin_unlock(&inode->i_lock);
+}
 
 static struct posix_acl *btrfs_get_acl(struct inode *inode, int type)
 {
 	int size;
 	const char *name;
 	char *value = NULL;
-	struct posix_acl *acl;
-
-	if (!IS_POSIXACL(inode))
-		return NULL;
-
-	acl = get_cached_acl(inode, type);
-	if (acl != ACL_NOT_CACHED)
-		return acl;
+	struct posix_acl *acl = NULL, **p_acl;
 
 	switch (type) {
 	case ACL_TYPE_ACCESS:
 		name = POSIX_ACL_XATTR_ACCESS;
+		p_acl = &BTRFS_I(inode)->i_acl;
 		break;
 	case ACL_TYPE_DEFAULT:
 		name = POSIX_ACL_XATTR_DEFAULT;
+		p_acl = &BTRFS_I(inode)->i_default_acl;
 		break;
 	default:
-		BUG();
+		return ERR_PTR(-EINVAL);
 	}
+
+	/* Handle the cached NULL acl case without locking */
+	acl = ACCESS_ONCE(*p_acl);
+	if (!acl)
+		return acl;
+
+	spin_lock(&inode->i_lock);
+	acl = *p_acl;
+	if (acl != BTRFS_ACL_NOT_CACHED)
+		acl = posix_acl_dup(acl);
+	spin_unlock(&inode->i_lock);
+
+	if (acl != BTRFS_ACL_NOT_CACHED)
+		return acl;
 
 	size = __btrfs_getxattr(inode, name, "", 0);
 	if (size > 0) {
@@ -63,17 +82,13 @@ static struct posix_acl *btrfs_get_acl(struct inode *inode, int type)
 		size = __btrfs_getxattr(inode, name, value, size);
 		if (size > 0) {
 			acl = posix_acl_from_xattr(value, size);
-			if (IS_ERR(acl)) {
-				kfree(value);
-				return acl;
-			}
-			set_cached_acl(inode, type, acl);
+			btrfs_update_cached_acl(inode, p_acl, acl);
 		}
 		kfree(value);
 	} else if (size == -ENOENT || size == -ENODATA || size == 0) {
 		/* FIXME, who returns -ENOENT?  I think nobody */
 		acl = NULL;
-		set_cached_acl(inode, type, acl);
+		btrfs_update_cached_acl(inode, p_acl, acl);
 	} else {
 		acl = ERR_PTR(-EIO);
 	}
@@ -81,16 +96,13 @@ static struct posix_acl *btrfs_get_acl(struct inode *inode, int type)
 	return acl;
 }
 
-static int btrfs_xattr_acl_get(struct dentry *dentry, const char *name,
-		void *value, size_t size, int type)
+static int btrfs_xattr_get_acl(struct inode *inode, int type,
+			       void *value, size_t size)
 {
 	struct posix_acl *acl;
 	int ret = 0;
 
-	if (!IS_POSIXACL(dentry->d_inode))
-		return -EOPNOTSUPP;
-
-	acl = btrfs_get_acl(dentry->d_inode, type);
+	acl = btrfs_get_acl(inode, type);
 
 	if (IS_ERR(acl))
 		return PTR_ERR(acl);
@@ -105,11 +117,11 @@ static int btrfs_xattr_acl_get(struct dentry *dentry, const char *name,
 /*
  * Needs to be called with fs_mutex held
  */
-static int btrfs_set_acl(struct btrfs_trans_handle *trans,
-			 struct inode *inode, struct posix_acl *acl, int type)
+static int btrfs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 {
 	int ret, size = 0;
 	const char *name;
+	struct posix_acl **p_acl;
 	char *value = NULL;
 	mode_t mode;
 
@@ -123,19 +135,19 @@ static int btrfs_set_acl(struct btrfs_trans_handle *trans,
 	switch (type) {
 	case ACL_TYPE_ACCESS:
 		mode = inode->i_mode;
-		name = POSIX_ACL_XATTR_ACCESS;
-		if (acl) {
-			ret = posix_acl_equiv_mode(acl, &mode);
-			if (ret < 0)
-				return ret;
-			inode->i_mode = mode;
-		}
+		ret = posix_acl_equiv_mode(acl, &mode);
+		if (ret < 0)
+			return ret;
 		ret = 0;
+		inode->i_mode = mode;
+		name = POSIX_ACL_XATTR_ACCESS;
+		p_acl = &BTRFS_I(inode)->i_acl;
 		break;
 	case ACL_TYPE_DEFAULT:
 		if (!S_ISDIR(inode->i_mode))
 			return acl ? -EINVAL : 0;
 		name = POSIX_ACL_XATTR_DEFAULT;
+		p_acl = &BTRFS_I(inode)->i_default_acl;
 		break;
 	default:
 		return -EINVAL;
@@ -154,64 +166,77 @@ static int btrfs_set_acl(struct btrfs_trans_handle *trans,
 			goto out;
 	}
 
-	ret = __btrfs_setxattr(trans, inode, name, value, size, 0);
+	ret = __btrfs_setxattr(inode, name, value, size, 0);
+
 out:
 	kfree(value);
 
 	if (!ret)
-		set_cached_acl(inode, type, acl);
+		btrfs_update_cached_acl(inode, p_acl, acl);
 
 	return ret;
 }
 
-static int btrfs_xattr_acl_set(struct dentry *dentry, const char *name,
-		const void *value, size_t size, int flags, int type)
+static int btrfs_xattr_set_acl(struct inode *inode, int type,
+			       const void *value, size_t size)
 {
-	int ret;
+	int ret = 0;
 	struct posix_acl *acl = NULL;
-
-	if (!inode_owner_or_capable(dentry->d_inode))
-		return -EPERM;
-
-	if (!IS_POSIXACL(dentry->d_inode))
-		return -EOPNOTSUPP;
 
 	if (value) {
 		acl = posix_acl_from_xattr(value, size);
-		if (IS_ERR(acl))
+		if (acl == NULL) {
+			value = NULL;
+			size = 0;
+		} else if (IS_ERR(acl)) {
 			return PTR_ERR(acl);
-
-		if (acl) {
-			ret = posix_acl_valid(acl);
-			if (ret)
-				goto out;
 		}
 	}
 
-	ret = btrfs_set_acl(NULL, dentry->d_inode, acl, type);
-out:
+	ret = btrfs_set_acl(inode, acl, type);
+
 	posix_acl_release(acl);
 
 	return ret;
 }
 
-int btrfs_check_acl(struct inode *inode, int mask, unsigned int flags)
+
+static int btrfs_xattr_acl_access_get(struct inode *inode, const char *name,
+				      void *value, size_t size)
 {
+	return btrfs_xattr_get_acl(inode, ACL_TYPE_ACCESS, value, size);
+}
+
+static int btrfs_xattr_acl_access_set(struct inode *inode, const char *name,
+				      const void *value, size_t size, int flags)
+{
+	return btrfs_xattr_set_acl(inode, ACL_TYPE_ACCESS, value, size);
+}
+
+static int btrfs_xattr_acl_default_get(struct inode *inode, const char *name,
+				       void *value, size_t size)
+{
+	return btrfs_xattr_get_acl(inode, ACL_TYPE_DEFAULT, value, size);
+}
+
+static int btrfs_xattr_acl_default_set(struct inode *inode, const char *name,
+			       const void *value, size_t size, int flags)
+{
+	return btrfs_xattr_set_acl(inode, ACL_TYPE_DEFAULT, value, size);
+}
+
+int btrfs_check_acl(struct inode *inode, int mask)
+{
+	struct posix_acl *acl;
 	int error = -EAGAIN;
 
-	if (flags & IPERM_FLAG_RCU) {
-		if (!negative_cached_acl(inode, ACL_TYPE_ACCESS))
-			error = -ECHILD;
+	acl = btrfs_get_acl(inode, ACL_TYPE_ACCESS);
 
-	} else {
-		struct posix_acl *acl;
-		acl = btrfs_get_acl(inode, ACL_TYPE_ACCESS);
-		if (IS_ERR(acl))
-			return PTR_ERR(acl);
-		if (acl) {
-			error = posix_acl_permission(inode, acl, mask);
-			posix_acl_release(acl);
-		}
+	if (IS_ERR(acl))
+		return PTR_ERR(acl);
+	if (acl) {
+		error = posix_acl_permission(inode, acl, mask);
+		posix_acl_release(acl);
 	}
 
 	return error;
@@ -222,8 +247,7 @@ int btrfs_check_acl(struct inode *inode, int mask, unsigned int flags)
  * stuff has been fixed to work with that.  If the locking stuff changes, we
  * need to re-evaluate the acl locking stuff.
  */
-int btrfs_init_acl(struct btrfs_trans_handle *trans,
-		   struct inode *inode, struct inode *dir)
+int btrfs_init_acl(struct inode *inode, struct inode *dir)
 {
 	struct posix_acl *acl = NULL;
 	int ret = 0;
@@ -248,8 +272,7 @@ int btrfs_init_acl(struct btrfs_trans_handle *trans,
 		mode_t mode;
 
 		if (S_ISDIR(inode->i_mode)) {
-			ret = btrfs_set_acl(trans, inode, acl,
-					    ACL_TYPE_DEFAULT);
+			ret = btrfs_set_acl(inode, acl, ACL_TYPE_DEFAULT);
 			if (ret)
 				goto failed;
 		}
@@ -264,11 +287,10 @@ int btrfs_init_acl(struct btrfs_trans_handle *trans,
 			inode->i_mode = mode;
 			if (ret > 0) {
 				/* we need an acl */
-				ret = btrfs_set_acl(trans, inode, clone,
+				ret = btrfs_set_acl(inode, clone,
 						    ACL_TYPE_ACCESS);
 			}
 		}
-		posix_acl_release(clone);
 	}
 failed:
 	posix_acl_release(acl);
@@ -298,38 +320,40 @@ int btrfs_acl_chmod(struct inode *inode)
 
 	ret = posix_acl_chmod_masq(clone, inode->i_mode);
 	if (!ret)
-		ret = btrfs_set_acl(NULL, inode, clone, ACL_TYPE_ACCESS);
+		ret = btrfs_set_acl(inode, clone, ACL_TYPE_ACCESS);
 
 	posix_acl_release(clone);
 
 	return ret;
 }
 
-const struct xattr_handler btrfs_xattr_acl_default_handler = {
+struct xattr_handler btrfs_xattr_acl_default_handler = {
 	.prefix = POSIX_ACL_XATTR_DEFAULT,
-	.flags	= ACL_TYPE_DEFAULT,
-	.get	= btrfs_xattr_acl_get,
-	.set	= btrfs_xattr_acl_set,
+	.get	= btrfs_xattr_acl_default_get,
+	.set	= btrfs_xattr_acl_default_set,
 };
 
-const struct xattr_handler btrfs_xattr_acl_access_handler = {
+struct xattr_handler btrfs_xattr_acl_access_handler = {
 	.prefix = POSIX_ACL_XATTR_ACCESS,
-	.flags	= ACL_TYPE_ACCESS,
-	.get	= btrfs_xattr_acl_get,
-	.set	= btrfs_xattr_acl_set,
+	.get	= btrfs_xattr_acl_access_get,
+	.set	= btrfs_xattr_acl_access_set,
 };
 
-#else /* CONFIG_BTRFS_FS_POSIX_ACL */
+#else /* CONFIG_FS_POSIX_ACL */
 
 int btrfs_acl_chmod(struct inode *inode)
 {
 	return 0;
 }
 
-int btrfs_init_acl(struct btrfs_trans_handle *trans,
-		   struct inode *inode, struct inode *dir)
+int btrfs_init_acl(struct inode *inode, struct inode *dir)
 {
 	return 0;
 }
 
-#endif /* CONFIG_BTRFS_FS_POSIX_ACL */
+int btrfs_check_acl(struct inode *inode, int mask)
+{
+	return 0;
+}
+
+#endif /* CONFIG_FS_POSIX_ACL */

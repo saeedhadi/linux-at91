@@ -16,15 +16,33 @@
 #include <asm/mmu_context.h>
 #include <asm/cacheflush.h>
 
-void __update_tlb(struct vm_area_struct *vma, unsigned long address, pte_t pte)
+void update_mmu_cache(struct vm_area_struct * vma,
+		      unsigned long address, pte_t pte)
 {
-	unsigned long flags, pteval, vpn;
+	unsigned long flags;
+	unsigned long pteval;
+	unsigned long vpn;
 
-	/*
-	 * Handle debugger faulting in for debugee.
-	 */
+	/* Ptrace may call this routine. */
 	if (vma && current->active_mm != vma->vm_mm)
 		return;
+
+#ifndef CONFIG_CACHE_OFF
+	{
+		unsigned long pfn = pte_pfn(pte);
+
+		if (pfn_valid(pfn)) {
+			struct page *page = pfn_to_page(pfn);
+
+			if (!test_bit(PG_mapped, &page->flags)) {
+				unsigned long phys = pte_val(pte) & PTE_PHYS_MASK;
+				__flush_wback_region((void *)P1SEGADDR(phys),
+						     PAGE_SIZE);
+				__set_bit(PG_mapped, &page->flags);
+			}
+		}
+	}
+#endif
 
 	local_irq_save(flags);
 
@@ -68,40 +86,11 @@ void __update_tlb(struct vm_area_struct *vma, unsigned long address, pte_t pte)
  * in extended mode, the legacy 8-bit ASID field in address array 1 has
  * undefined behaviour.
  */
-void local_flush_tlb_one(unsigned long asid, unsigned long page)
+void __uses_jump_to_uncached local_flush_tlb_one(unsigned long asid,
+						 unsigned long page)
 {
 	jump_to_uncached();
 	__raw_writel(page, MMU_UTLB_ADDRESS_ARRAY | MMU_PAGE_ASSOC_BIT);
 	__raw_writel(asid, MMU_UTLB_ADDRESS_ARRAY2 | MMU_PAGE_ASSOC_BIT);
-	__raw_writel(page, MMU_ITLB_ADDRESS_ARRAY | MMU_PAGE_ASSOC_BIT);
-	__raw_writel(asid, MMU_ITLB_ADDRESS_ARRAY2 | MMU_PAGE_ASSOC_BIT);
 	back_to_cached();
-}
-
-void local_flush_tlb_all(void)
-{
-	unsigned long flags, status;
-	int i;
-
-	/*
-	 * Flush all the TLB.
-	 */
-	local_irq_save(flags);
-	jump_to_uncached();
-
-	status = __raw_readl(MMUCR);
-	status = ((status & MMUCR_URB) >> MMUCR_URB_SHIFT);
-
-	if (status == 0)
-		status = MMUCR_URB_NENTRIES;
-
-	for (i = 0; i < status; i++)
-		__raw_writel(0x0, MMU_UTLB_ADDRESS_ARRAY | (i << 8));
-
-	for (i = 0; i < 4; i++)
-		__raw_writel(0x0, MMU_ITLB_ADDRESS_ARRAY | (i << 8));
-
-	back_to_cached();
-	ctrl_barrier();
-	local_irq_restore(flags);
 }

@@ -5,7 +5,6 @@
  * Copyright (c) 2004-2006 Herbert Xu <herbert@gondor.apana.org.au>
  */
 
-#include <linux/gfp.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -14,7 +13,6 @@
 #include <net/dsfield.h>
 #include <net/dst.h>
 #include <net/inet_ecn.h>
-#include <net/ip6_route.h>
 #include <net/ipv6.h>
 #include <net/xfrm.h>
 
@@ -33,7 +31,7 @@ static inline void ipip6_ecn_decapsulate(struct sk_buff *skb)
  */
 static int xfrm6_mode_tunnel_output(struct xfrm_state *x, struct sk_buff *skb)
 {
-	struct dst_entry *dst = skb_dst(skb);
+	struct dst_entry *dst = skb->dst;
 	struct ipv6hdr *top_iph;
 	int dsfield;
 
@@ -47,14 +45,14 @@ static int xfrm6_mode_tunnel_output(struct xfrm_state *x, struct sk_buff *skb)
 
 	memcpy(top_iph->flow_lbl, XFRM_MODE_SKB_CB(skb)->flow_lbl,
 	       sizeof(top_iph->flow_lbl));
-	top_iph->nexthdr = xfrm_af2proto(skb_dst(skb)->ops->family);
+	top_iph->nexthdr = xfrm_af2proto(skb->dst->ops->family);
 
 	dsfield = XFRM_MODE_SKB_CB(skb)->tos;
 	dsfield = INET_ECN_encapsulate(dsfield, dsfield);
 	if (x->props.flags & XFRM_STATE_NOECN)
 		dsfield &= ~INET_ECN_MASK;
 	ipv6_change_dsfield(top_iph, 0, dsfield);
-	top_iph->hop_limit = ip6_dst_hoplimit(dst->child);
+	top_iph->hop_limit = dst_metric(dst->child, RTAX_HOPLIMIT);
 	ipv6_addr_copy(&top_iph->saddr, (struct in6_addr *)&x->props.saddr);
 	ipv6_addr_copy(&top_iph->daddr, (struct in6_addr *)&x->id.daddr);
 	return 0;

@@ -25,14 +25,13 @@
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/module.h>
-#include <linux/mtd/nand.h>
 #include <linux/platform_device.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/ads7846.h>
 #include <linux/fb.h>
 #include <linux/mtd/physmap.h>
 
-#include <video/atmel_lcdfb.h>
+#include <video/atmel_lcdc.h>
 
 #include <mach/hardware.h>
 #include <asm/setup.h>
@@ -43,7 +42,6 @@
 
 #include <mach/board.h>
 #include <mach/gpio.h>
-#include <mach/atmel_lcdc.h>
 #include <mach/at91cap9_matrix.h>
 #include <mach/at91sam9_smc.h>
 
@@ -137,14 +135,13 @@ static struct spi_board_info cap9adk_spi_devices[] = {
 	{
 		.modalias	= "ads7846",
 		.chip_select	= 3,		/* can be 2 or 3, depending on J2 jumper */
-		.max_speed_hz	= 125000 * 26,	/* (max sample rate @ 3V) * (cmd + data + overhead) */
+		.max_speed_hz	= 125000 * 16,	/* max sample rate * clocks per sample */
 		.bus_num	= 0,
 		.platform_data	= &ads_info,
 		.irq		= AT91_PIN_PC4,
 	},
 #endif
 };
-
 
 /*
  * MCI (SD/MMC)
@@ -188,7 +185,6 @@ static struct atmel_nand_data __initdata cap9adk_nand_data = {
 //	.det_pin	= ... not connected
 //	.rdy_pin	= ... not connected
 	.enable_pin	= AT91_PIN_PD15,
-	.ecc_mode	= NAND_ECC_SOFT,
 	.partition_info	= nand_partitions,
 #if defined(CONFIG_MTD_NAND_ATMEL_BUSWIDTH_16)
 	.bus_width_16	= 1,
@@ -367,7 +363,7 @@ static struct atmel_lcdfb_info __initdata cap9adk_lcdc_data;
 /*
  * AC97
  */
-static struct ac97c_platform_data cap9adk_ac97_data = {
+static struct atmel_ac97_data cap9adk_ac97_data = {
 //	.reset_pin	= ... not connected
 };
 
@@ -402,6 +398,8 @@ static void __init cap9adk_board_init(void)
 
 MACHINE_START(AT91CAP9ADK, "Atmel AT91CAP9A-DK")
 	/* Maintainer: Stelian Pop <stelian.pop@leadtechdesign.com> */
+	.phys_io	= AT91_BASE_SYS,
+	.io_pg_offst	= (AT91_VA_BASE_SYS >> 18) & 0xfffc,
 	.boot_params	= AT91_SDRAM_BASE + 0x100,
 	.timer		= &at91sam926x_timer,
 	.map_io		= cap9adk_map_io,

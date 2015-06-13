@@ -39,7 +39,6 @@ a power of 10, from 1 to 10^7, of which only 3 or 4 are useful.  In
 addition, the clock does not seem to be very accurate.
 */
 
-#include <linux/interrupt.h>
 #include "../comedidev.h"
 
 #include <linux/ioport.h>
@@ -60,30 +59,18 @@ addition, the clock does not seem to be very accurate.
 #define DT2814_ENB 0x10
 #define DT2814_CHANMASK 0x0f
 
-static int dt2814_attach(struct comedi_device *dev,
-			 struct comedi_devconfig *it);
-static int dt2814_detach(struct comedi_device *dev);
+static int dt2814_attach(struct comedi_device * dev, struct comedi_devconfig * it);
+static int dt2814_detach(struct comedi_device * dev);
 static struct comedi_driver driver_dt2814 = {
-	.driver_name = "dt2814",
-	.module = THIS_MODULE,
-	.attach = dt2814_attach,
-	.detach = dt2814_detach,
+      driver_name:"dt2814",
+      module:THIS_MODULE,
+      attach:dt2814_attach,
+      detach:dt2814_detach,
 };
 
-static int __init driver_dt2814_init_module(void)
-{
-	return comedi_driver_register(&driver_dt2814);
-}
+COMEDI_INITCLEANUP(driver_dt2814);
 
-static void __exit driver_dt2814_cleanup_module(void)
-{
-	comedi_driver_unregister(&driver_dt2814);
-}
-
-module_init(driver_dt2814_init_module);
-module_exit(driver_dt2814_cleanup_module);
-
-static irqreturn_t dt2814_interrupt(int irq, void *dev);
+static irqreturn_t dt2814_interrupt(int irq, void *dev PT_REGS_ARG);
 
 struct dt2814_private {
 
@@ -96,9 +83,8 @@ struct dt2814_private {
 #define DT2814_TIMEOUT 10
 #define DT2814_MAX_SPEED 100000	/* Arbitrary 10 khz limit */
 
-static int dt2814_ai_insn_read(struct comedi_device *dev,
-			       struct comedi_subdevice *s,
-			       struct comedi_insn *insn, unsigned int *data)
+static int dt2814_ai_insn_read(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data)
 {
 	int n, i, hi, lo;
 	int chan;
@@ -110,13 +96,13 @@ static int dt2814_ai_insn_read(struct comedi_device *dev,
 		outb(chan, dev->iobase + DT2814_CSR);
 		for (i = 0; i < DT2814_TIMEOUT; i++) {
 			status = inb(dev->iobase + DT2814_CSR);
-			printk(KERN_INFO "dt2814: status: %02x\n", status);
-			udelay(10);
+			printk("dt2814: status: %02x\n", status);
+			comedi_udelay(10);
 			if (status & DT2814_FINISH)
 				break;
 		}
 		if (i >= DT2814_TIMEOUT) {
-			printk(KERN_INFO "dt2814: status: %02x\n", status);
+			printk("dt2814: status: %02x\n", status);
 			return -ETIMEDOUT;
 		}
 
@@ -148,8 +134,8 @@ static int dt2814_ns_to_timer(unsigned int *ns, unsigned int flags)
 	return i;
 }
 
-static int dt2814_ai_cmdtest(struct comedi_device *dev,
-			     struct comedi_subdevice *s, struct comedi_cmd *cmd)
+static int dt2814_ai_cmdtest(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_cmd * cmd)
 {
 	int err = 0;
 	int tmp;
@@ -184,10 +170,9 @@ static int dt2814_ai_cmdtest(struct comedi_device *dev,
 	if (err)
 		return 1;
 
-	/* step 2: make sure trigger sources are
-	 * unique and mutually compatible */
+	/* step 2: make sure trigger sources are unique and mutually compatible */
 
-	/* note that mutual compatibility is not an issue here */
+	/* note that mutual compatiblity is not an issue here */
 	if (cmd->stop_src != TRIG_TIMER && cmd->stop_src != TRIG_EXT)
 		err++;
 
@@ -241,15 +226,15 @@ static int dt2814_ai_cmdtest(struct comedi_device *dev,
 	return 0;
 }
 
-static int dt2814_ai_cmd(struct comedi_device *dev, struct comedi_subdevice *s)
+static int dt2814_ai_cmd(struct comedi_device * dev, struct comedi_subdevice * s)
 {
 	struct comedi_cmd *cmd = &s->async->cmd;
 	int chan;
 	int trigvar;
 
 	trigvar =
-	    dt2814_ns_to_timer(&cmd->scan_begin_arg,
-			       cmd->flags & TRIG_ROUND_MASK);
+		dt2814_ns_to_timer(&cmd->scan_begin_arg,
+		cmd->flags & TRIG_ROUND_MASK);
 
 	chan = CR_CHAN(cmd->chanlist[0]);
 
@@ -260,7 +245,7 @@ static int dt2814_ai_cmd(struct comedi_device *dev, struct comedi_subdevice *s)
 
 }
 
-static int dt2814_attach(struct comedi_device *dev, struct comedi_devconfig *it)
+static int dt2814_attach(struct comedi_device * dev, struct comedi_devconfig * it)
 {
 	int i, irq;
 	int ret;
@@ -268,18 +253,18 @@ static int dt2814_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 	unsigned long iobase;
 
 	iobase = it->options[0];
-	printk(KERN_INFO "comedi%d: dt2814: 0x%04lx ", dev->minor, iobase);
+	printk("comedi%d: dt2814: 0x%04lx ", dev->minor, iobase);
 	if (!request_region(iobase, DT2814_SIZE, "dt2814")) {
-		printk(KERN_ERR "I/O port conflict\n");
+		printk("I/O port conflict\n");
 		return -EIO;
 	}
 	dev->iobase = iobase;
 	dev->board_name = "dt2814";
 
 	outb(0, dev->iobase + DT2814_CSR);
-	udelay(100);
+	comedi_udelay(100);
 	if (inb(dev->iobase + DT2814_CSR) & DT2814_ERR) {
-		printk(KERN_ERR "reset error (fatal)\n");
+		printk("reset error (fatal)\n");
 		return -EIO;
 	}
 	i = inb(dev->iobase + DT2814_DATA);
@@ -294,13 +279,13 @@ static int dt2814_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 
 		outb(0, dev->iobase + DT2814_CSR);
 
-		udelay(100);
+		comedi_udelay(100);
 
 		irq = probe_irq_off(irqs);
 		restore_flags(flags);
-		if (inb(dev->iobase + DT2814_CSR) & DT2814_ERR)
-			printk(KERN_DEBUG "error probing irq (bad)\n");
-
+		if (inb(dev->iobase + DT2814_CSR) & DT2814_ERR) {
+			printk("error probing irq (bad) \n");
+		}
 
 		i = inb(dev->iobase + DT2814_DATA);
 		i = inb(dev->iobase + DT2814_DATA);
@@ -308,28 +293,25 @@ static int dt2814_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 #endif
 	dev->irq = 0;
 	if (irq > 0) {
-		if (request_irq(irq, dt2814_interrupt, 0, "dt2814", dev)) {
-			printk(KERN_WARNING "(irq %d unavailable)\n", irq);
+		if (comedi_request_irq(irq, dt2814_interrupt, 0, "dt2814", dev)) {
+			printk("(irq %d unavailable)\n", irq);
 		} else {
-			printk(KERN_INFO "( irq = %d )\n", irq);
+			printk("( irq = %d )\n", irq);
 			dev->irq = irq;
 		}
 	} else if (irq == 0) {
-		printk(KERN_WARNING "(no irq)\n");
+		printk("(no irq)\n");
 	} else {
 #if 0
-		printk(KERN_DEBUG "(probe returned multiple irqs--bad)\n");
+		printk("(probe returned multiple irqs--bad)\n");
 #else
-		printk(KERN_WARNING "(irq probe not implemented)\n");
+		printk("(irq probe not implemented)\n");
 #endif
 	}
 
-	ret = alloc_subdevices(dev, 1);
-	if (ret < 0)
+	if ((ret = alloc_subdevices(dev, 1)) < 0)
 		return ret;
-
-	ret = alloc_private(dev, sizeof(struct dt2814_private));
-	if (ret < 0)
+	if ((ret = alloc_private(dev, sizeof(struct dt2814_private))) < 0)
 		return ret;
 
 	s = dev->subdevices + 0;
@@ -347,20 +329,21 @@ static int dt2814_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 	return 0;
 }
 
-static int dt2814_detach(struct comedi_device *dev)
+static int dt2814_detach(struct comedi_device * dev)
 {
-	printk(KERN_INFO "comedi%d: dt2814: remove\n", dev->minor);
+	printk("comedi%d: dt2814: remove\n", dev->minor);
 
-	if (dev->irq)
-		free_irq(dev->irq, dev);
-
-	if (dev->iobase)
+	if (dev->irq) {
+		comedi_free_irq(dev->irq, dev);
+	}
+	if (dev->iobase) {
 		release_region(dev->iobase, DT2814_SIZE);
+	}
 
 	return 0;
 }
 
-static irqreturn_t dt2814_interrupt(int irq, void *d)
+static irqreturn_t dt2814_interrupt(int irq, void *d PT_REGS_ARG)
 {
 	int lo, hi;
 	struct comedi_device *dev = d;
@@ -398,7 +381,3 @@ static irqreturn_t dt2814_interrupt(int irq, void *d)
 	comedi_event(dev, s);
 	return IRQ_HANDLED;
 }
-
-MODULE_AUTHOR("Comedi http://www.comedi.org");
-MODULE_DESCRIPTION("Comedi low-level driver");
-MODULE_LICENSE("GPL");

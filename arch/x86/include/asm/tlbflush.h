@@ -17,7 +17,7 @@
 
 static inline void __native_flush_tlb(void)
 {
-	native_write_cr3(native_read_cr3());
+	write_cr3(read_cr3());
 }
 
 static inline void __native_flush_tlb_global(void)
@@ -32,11 +32,11 @@ static inline void __native_flush_tlb_global(void)
 	 */
 	raw_local_irq_save(flags);
 
-	cr4 = native_read_cr4();
+	cr4 = read_cr4();
 	/* clear PGE */
-	native_write_cr4(cr4 & ~X86_CR4_PGE);
+	write_cr4(cr4 & ~X86_CR4_PGE);
 	/* write old PGE again and flush TLBs */
-	native_write_cr4(cr4);
+	write_cr4(cr4);
 
 	raw_local_irq_restore(flags);
 }
@@ -171,5 +171,7 @@ static inline void flush_tlb_kernel_range(unsigned long start,
 {
 	flush_tlb_all();
 }
+
+extern void zap_low_mappings(void);
 
 #endif /* _ASM_X86_TLBFLUSH_H */

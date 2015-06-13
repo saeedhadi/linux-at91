@@ -14,9 +14,7 @@
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/ptrace.h>
-#include <linux/smp.h>
 #include <linux/stddef.h>
-#include <linux/module.h>
 
 #include <asm/bugs.h>
 #include <asm/cpu.h>
@@ -24,8 +22,6 @@
 #include <asm/mipsregs.h>
 #include <asm/system.h>
 #include <asm/watch.h>
-#include <asm/spram.h>
-#include <asm/uaccess.h>
 
 /*
  * Not all of the MIPS CPUs have the "wait" instruction available. Moreover,
@@ -34,8 +30,7 @@
  * The wait instruction stops the pipeline and reduces the power consumption of
  * the CPU very much.
  */
-void (*cpu_wait)(void);
-EXPORT_SYMBOL(cpu_wait);
+void (*cpu_wait)(void) = NULL;
 
 static void r3081_wait(void)
 {
@@ -95,13 +90,16 @@ static void rm7k_wait_irqoff(void)
 	local_irq_enable();
 }
 
-/*
- * The Au1xxx wait is available only if using 32khz counter or
- * external timer source, but specifically not CP0 Counter.
- * alchemy/common/time.c may override cpu_wait!
- */
+/* The Au1xxx wait is available only if using 32khz counter or
+ * external timer source, but specifically not CP0 Counter. */
+int allow_au1k_wait;
+
 static void au1k_wait(void)
 {
+	if (!allow_au1k_wait)
+		return;
+
+	/* using the wait instruction makes CP0 counter unusable */
 	__asm__("	.set	mips3			\n"
 		"	cache	0x14, 0(%0)		\n"
 		"	cache	0x14, 32(%0)		\n"
@@ -116,7 +114,7 @@ static void au1k_wait(void)
 		: : "r" (au1k_wait));
 }
 
-static int __initdata nowait;
+static int __initdata nowait = 0;
 
 static int __init wait_disable(char *s)
 {
@@ -126,30 +124,6 @@ static int __init wait_disable(char *s)
 }
 
 __setup("nowait", wait_disable);
-
-static int __cpuinitdata mips_fpu_disabled;
-
-static int __init fpu_disable(char *s)
-{
-	cpu_data[0].options &= ~MIPS_CPU_FPU;
-	mips_fpu_disabled = 1;
-
-	return 1;
-}
-
-__setup("nofpu", fpu_disable);
-
-int __cpuinitdata mips_dsp_disabled;
-
-static int __init dsp_disable(char *s)
-{
-	cpu_data[0].ases &= ~MIPS_ASE_DSP;
-	mips_dsp_disabled = 1;
-
-	return 1;
-}
-
-__setup("nodsp", dsp_disable);
 
 void __init check_wait(void)
 {
@@ -183,14 +157,8 @@ void __init check_wait(void)
 	case CPU_5KC:
 	case CPU_25KF:
 	case CPU_PR4450:
-	case CPU_BMIPS3300:
-	case CPU_BMIPS4350:
-	case CPU_BMIPS4380:
-	case CPU_BMIPS5000:
+	case CPU_BCM3302:
 	case CPU_CAVIUM_OCTEON:
-	case CPU_CAVIUM_OCTEON_PLUS:
-	case CPU_CAVIUM_OCTEON2:
-	case CPU_JZRISC:
 		cpu_wait = r4k_wait;
 		break;
 
@@ -311,15 +279,6 @@ static inline unsigned long cpu_get_fpu_id(void)
 static inline int __cpu_has_fpu(void)
 {
 	return ((cpu_get_fpu_id() & 0xff00) != FPIR_IMP_NONE);
-}
-
-static inline void cpu_probe_vmbits(struct cpuinfo_mips *c)
-{
-#ifdef __NEED_VMBITS_PROBE
-	write_c0_entryhi(0x3fffffffffffe000ULL);
-	back_to_back_c0_hazard();
-	c->vmbits = fls64(read_c0_entryhi() & 0x3fffffffffffe000ULL);
-#endif
 }
 
 #define R4K_OPTS (MIPS_CPU_TLB | MIPS_CPU_4KEX | MIPS_CPU_4K_CACHE \
@@ -729,21 +688,6 @@ static inline unsigned int decode_config3(struct cpuinfo_mips *c)
 	return config3 & MIPS_CONF_M;
 }
 
-static inline unsigned int decode_config4(struct cpuinfo_mips *c)
-{
-	unsigned int config4;
-
-	config4 = read_c0_config4();
-
-	if ((config4 & MIPS_CONF4_MMUEXTDEF) == MIPS_CONF4_MMUEXTDEF_MMUSIZEEXT
-	    && cpu_has_tlb)
-		c->tlbsize += (config4 & MIPS_CONF4_MMUSIZEEXT) * 0x40;
-
-	c->kscratch_mask = (config4 >> 16) & 0xff;
-
-	return config4 & MIPS_CONF_M;
-}
-
 static void __cpuinit decode_configs(struct cpuinfo_mips *c)
 {
 	int ok;
@@ -762,14 +706,15 @@ static void __cpuinit decode_configs(struct cpuinfo_mips *c)
 		ok = decode_config2(c);
 	if (ok)
 		ok = decode_config3(c);
-	if (ok)
-		ok = decode_config4(c);
 
 	mips_probe_watch_registers(c);
-
-	if (cpu_has_mips_r2)
-		c->core = read_c0_ebase() & 0x3ff;
 }
+
+#ifdef CONFIG_CPU_MIPSR2
+extern void spram_config(void);
+#else
+static inline void spram_config(void) {}
+#endif
 
 static inline void cpu_probe_mips(struct cpuinfo_mips *c, unsigned int cpu)
 {
@@ -780,6 +725,9 @@ static inline void cpu_probe_mips(struct cpuinfo_mips *c, unsigned int cpu)
 		__cpu_name[cpu] = "MIPS 4Kc";
 		break;
 	case PRID_IMP_4KEC:
+		c->cputype = CPU_4KEC;
+		__cpu_name[cpu] = "MIPS 4KEc";
+		break;
 	case PRID_IMP_4KECR2:
 		c->cputype = CPU_4KEC;
 		__cpu_name[cpu] = "MIPS 4KEc";
@@ -907,34 +855,13 @@ static inline void cpu_probe_broadcom(struct cpuinfo_mips *c, unsigned int cpu)
 {
 	decode_configs(c);
 	switch (c->processor_id & 0xff00) {
-	case PRID_IMP_BMIPS32_REV4:
-	case PRID_IMP_BMIPS32_REV8:
-		c->cputype = CPU_BMIPS32;
-		__cpu_name[cpu] = "Broadcom BMIPS32";
+	case PRID_IMP_BCM3302:
+		c->cputype = CPU_BCM3302;
+		__cpu_name[cpu] = "Broadcom BCM3302";
 		break;
-	case PRID_IMP_BMIPS3300:
-	case PRID_IMP_BMIPS3300_ALT:
-	case PRID_IMP_BMIPS3300_BUG:
-		c->cputype = CPU_BMIPS3300;
-		__cpu_name[cpu] = "Broadcom BMIPS3300";
-		break;
-	case PRID_IMP_BMIPS43XX: {
-		int rev = c->processor_id & 0xff;
-
-		if (rev >= PRID_REV_BMIPS4380_LO &&
-				rev <= PRID_REV_BMIPS4380_HI) {
-			c->cputype = CPU_BMIPS4380;
-			__cpu_name[cpu] = "Broadcom BMIPS4380";
-		} else {
-			c->cputype = CPU_BMIPS4350;
-			__cpu_name[cpu] = "Broadcom BMIPS4350";
-		}
-		break;
-	}
-	case PRID_IMP_BMIPS5000:
-		c->cputype = CPU_BMIPS5000;
-		__cpu_name[cpu] = "Broadcom BMIPS5000";
-		c->options |= MIPS_CPU_ULRI;
+	case PRID_IMP_BCM4710:
+		c->cputype = CPU_BCM4710;
+		__cpu_name[cpu] = "Broadcom BCM4710";
 		break;
 	}
 }
@@ -946,24 +873,12 @@ static inline void cpu_probe_cavium(struct cpuinfo_mips *c, unsigned int cpu)
 	case PRID_IMP_CAVIUM_CN38XX:
 	case PRID_IMP_CAVIUM_CN31XX:
 	case PRID_IMP_CAVIUM_CN30XX:
-		c->cputype = CPU_CAVIUM_OCTEON;
-		__cpu_name[cpu] = "Cavium Octeon";
-		goto platform;
 	case PRID_IMP_CAVIUM_CN58XX:
 	case PRID_IMP_CAVIUM_CN56XX:
 	case PRID_IMP_CAVIUM_CN50XX:
 	case PRID_IMP_CAVIUM_CN52XX:
-		c->cputype = CPU_CAVIUM_OCTEON_PLUS;
-		__cpu_name[cpu] = "Cavium Octeon+";
-platform:
-		if (cpu == 0)
-			__elf_platform = "octeon";
-		break;
-	case PRID_IMP_CAVIUM_CN63XX:
-		c->cputype = CPU_CAVIUM_OCTEON2;
-		__cpu_name[cpu] = "Cavium Octeon II";
-		if (cpu == 0)
-			__elf_platform = "octeon2";
+		c->cputype = CPU_CAVIUM_OCTEON;
+		__cpu_name[cpu] = "Cavium Octeon";
 		break;
 	default:
 		printk(KERN_INFO "Unknown Octeon chip!\n");
@@ -972,30 +887,7 @@ platform:
 	}
 }
 
-static inline void cpu_probe_ingenic(struct cpuinfo_mips *c, unsigned int cpu)
-{
-	decode_configs(c);
-	/* JZRISC does not implement the CP0 counter. */
-	c->options &= ~MIPS_CPU_COUNTER;
-	switch (c->processor_id & 0xff00) {
-	case PRID_IMP_JZRISC:
-		c->cputype = CPU_JZRISC;
-		__cpu_name[cpu] = "Ingenic JZRISC";
-		break;
-	default:
-		panic("Unknown Ingenic Processor ID!");
-		break;
-	}
-}
-
-#ifdef CONFIG_64BIT
-/* For use by uaccess.h */
-u64 __ua_limit;
-EXPORT_SYMBOL(__ua_limit);
-#endif
-
 const char *__cpu_name[NR_CPUS];
-const char *__elf_platform;
 
 __cpuinit void cpu_probe(void)
 {
@@ -1032,9 +924,6 @@ __cpuinit void cpu_probe(void)
 	case PRID_COMP_CAVIUM:
 		cpu_probe_cavium(c, cpu);
 		break;
-	case PRID_COMP_INGENIC:
-		cpu_probe_ingenic(c, cpu);
-		break;
 	}
 
 	BUG_ON(!__cpu_name[cpu]);
@@ -1046,12 +935,6 @@ __cpuinit void cpu_probe(void)
 	 * manually setup otherwise it could trigger some nasty bugs.
 	 */
 	BUG_ON(current_cpu_type() != c->cputype);
-
-	if (mips_fpu_disabled)
-		c->options &= ~MIPS_CPU_FPU;
-
-	if (mips_dsp_disabled)
-		c->ases &= ~MIPS_ASE_DSP;
 
 	if (c->options & MIPS_CPU_FPU) {
 		c->fpu_id = cpu_get_fpu_id();
@@ -1069,13 +952,6 @@ __cpuinit void cpu_probe(void)
 		c->srsets = ((read_c0_srsctl() >> 26) & 0x0f) + 1;
 	else
 		c->srsets = 1;
-
-	cpu_probe_vmbits(c);
-
-#ifdef CONFIG_64BIT
-	if (cpu == 0)
-		__ua_limit = ~((1ull << cpu_vmbits) - 1);
-#endif
 }
 
 __cpuinit void cpu_report(void)

@@ -21,7 +21,7 @@
 #include <linux/watchdog.h>
 #include <linux/io.h>
 #include <linux/uaccess.h>
-#include <mach/hardware.h>
+#include <mach/timex.h>
 #include <mach/regs-timer.h>
 
 #define WDT_DEFAULT_TIME	5	/* seconds */
@@ -145,7 +145,7 @@ static int ks8695_wdt_close(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static const struct watchdog_info ks8695_wdt_info = {
+static struct watchdog_info ks8695_wdt_info = {
 	.identity	= "ks8695 watchdog",
 	.options	= WDIOF_SETTIMEOUT | WDIOF_KEEPALIVEPING,
 };
@@ -293,8 +293,8 @@ static int __init ks8695_wdt_init(void)
 	   if not reset to the default */
 	if (ks8695_wdt_settimeout(wdt_time)) {
 		ks8695_wdt_settimeout(WDT_DEFAULT_TIME);
-		pr_info("ks8695_wdt: wdt_time value must be 1 <= wdt_time <= %i"
-					", using %d\n", wdt_time, WDT_MAX_TIME);
+		pr_info("ks8695_wdt: wdt_time value must be 1 <= wdt_time <= %i, using %d\n",
+							wdt_time, WDT_MAX_TIME);
 	}
 	return platform_driver_register(&ks8695wdt_driver);
 }

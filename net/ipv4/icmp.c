@@ -74,7 +74,6 @@
 #include <linux/netdevice.h>
 #include <linux/string.h>
 #include <linux/netfilter_ipv4.h>
-#include <linux/slab.h>
 #include <net/snmp.h>
 #include <net/ip.h>
 #include <net/route.h>
@@ -115,7 +114,7 @@ struct icmp_bxm {
 /* An array of errno for error messages from dest unreach. */
 /* RFC 1122: 3.2.2.1 States that NET_UNREACH, HOST_UNREACH and SR_FAILED MUST be considered 'transient errs'. */
 
-const struct icmp_err icmp_err_convert[] = {
+struct icmp_err icmp_err_convert[] = {
 	{
 		.errno = ENETUNREACH,	/* ICMP_NET_UNREACH */
 		.fatal = 0,
@@ -181,7 +180,6 @@ const struct icmp_err icmp_err_convert[] = {
 		.fatal = 1,
 	},
 };
-EXPORT_SYMBOL(icmp_err_convert);
 
 /*
  *	ICMP control array. This specifies what to do with each ICMP.
@@ -233,11 +231,47 @@ static inline void icmp_xmit_unlock(struct sock *sk)
  *	Send an ICMP frame.
  */
 
-static inline bool icmpv4_xrlim_allow(struct net *net, struct rtable *rt,
+/*
+ *	Check transmit rate limitation for given message.
+ *	The rate information is held in the destination cache now.
+ *	This function is generic and could be used for other purposes
+ *	too. It uses a Token bucket filter as suggested by Alexey Kuznetsov.
+ *
+ *	Note that the same dst_entry fields are modified by functions in
+ *	route.c too, but these work for packet destinations while xrlim_allow
+ *	works for icmp destinations. This means the rate limiting information
+ *	for one "ip object" is shared - and these ICMPs are twice limited:
+ *	by source and by destination.
+ *
+ *	RFC 1812: 4.3.2.8 SHOULD be able to limit error message rate
+ *			  SHOULD allow setting of rate limits
+ *
+ * 	Shared between ICMPv4 and ICMPv6.
+ */
+#define XRLIM_BURST_FACTOR 6
+int xrlim_allow(struct dst_entry *dst, int timeout)
+{
+	unsigned long now, token = dst->rate_tokens;
+	int rc = 0;
+
+	now = jiffies;
+	token += now - dst->rate_last;
+	dst->rate_last = now;
+	if (token > XRLIM_BURST_FACTOR * timeout)
+		token = XRLIM_BURST_FACTOR * timeout;
+	if (token >= timeout) {
+		token -= timeout;
+		rc = 1;
+	}
+	dst->rate_tokens = token;
+	return rc;
+}
+
+static inline int icmpv4_xrlim_allow(struct net *net, struct rtable *rt,
 		int type, int code)
 {
-	struct dst_entry *dst = &rt->dst;
-	bool rc = true;
+	struct dst_entry *dst = &rt->u.dst;
+	int rc = 1;
 
 	if (type > NR_ICMP_TYPES)
 		goto out;
@@ -251,12 +285,8 @@ static inline bool icmpv4_xrlim_allow(struct net *net, struct rtable *rt,
 		goto out;
 
 	/* Limit if icmp type is enabled in ratemask. */
-	if ((1 << type) & net->ipv4.sysctl_icmp_ratemask) {
-		if (!rt->peer)
-			rt_bind_peer(rt, 1);
-		rc = inet_peer_xrlim_allow(rt->peer,
-					   net->ipv4.sysctl_icmp_ratelimit);
-	}
+	if ((1 << type) & net->ipv4.sysctl_icmp_ratemask)
+		rc = xrlim_allow(dst, net->ipv4.sysctl_icmp_ratelimit);
 out:
 	return rc;
 }
@@ -296,14 +326,13 @@ static void icmp_push_reply(struct icmp_bxm *icmp_param,
 	struct sock *sk;
 	struct sk_buff *skb;
 
-	sk = icmp_sk(dev_net((*rt)->dst.dev));
+	sk = icmp_sk(dev_net((*rt)->u.dst.dev));
 	if (ip_append_data(sk, icmp_glue_bits, icmp_param,
 			   icmp_param->data_len+icmp_param->head_len,
 			   icmp_param->head_len,
-			   ipc, rt, MSG_DONTWAIT) < 0) {
-		ICMP_INC_STATS_BH(sock_net(sk), ICMP_MIB_OUTERRORS);
+			   ipc, rt, MSG_DONTWAIT) < 0)
 		ip_flush_pending_frames(sk);
-	} else if ((skb = skb_peek(&sk->sk_write_queue)) != NULL) {
+	else if ((skb = skb_peek(&sk->sk_write_queue)) != NULL) {
 		struct icmphdr *icmph = icmp_hdr(skb);
 		__wsum csum = 0;
 		struct sk_buff *skb1;
@@ -327,8 +356,8 @@ static void icmp_push_reply(struct icmp_bxm *icmp_param,
 static void icmp_reply(struct icmp_bxm *icmp_param, struct sk_buff *skb)
 {
 	struct ipcm_cookie ipc;
-	struct rtable *rt = skb_rtable(skb);
-	struct net *net = dev_net(rt->dst.dev);
+	struct rtable *rt = skb->rtable;
+	struct net *net = dev_net(rt->u.dst.dev);
 	struct sock *sk;
 	struct inet_sock *inet;
 	__be32 daddr;
@@ -346,22 +375,20 @@ static void icmp_reply(struct icmp_bxm *icmp_param, struct sk_buff *skb)
 	inet->tos = ip_hdr(skb)->tos;
 	daddr = ipc.addr = rt->rt_src;
 	ipc.opt = NULL;
-	ipc.tx_flags = 0;
+	ipc.shtx.flags = 0;
 	if (icmp_param->replyopts.optlen) {
 		ipc.opt = &icmp_param->replyopts;
 		if (ipc.opt->srr)
 			daddr = icmp_param->replyopts.faddr;
 	}
 	{
-		struct flowi4 fl4 = {
-			.daddr = daddr,
-			.saddr = rt->rt_spec_dst,
-			.flowi4_tos = RT_TOS(ip_hdr(skb)->tos),
-			.flowi4_proto = IPPROTO_ICMP,
-		};
-		security_skb_classify_flow(skb, flowi4_to_flowi(&fl4));
-		rt = ip_route_output_key(net, &fl4);
-		if (IS_ERR(rt))
+		struct flowi fl = { .nl_u = { .ip4_u =
+					      { .daddr = daddr,
+						.saddr = rt->rt_spec_dst,
+						.tos = RT_TOS(ip_hdr(skb)->tos) } },
+				    .proto = IPPROTO_ICMP };
+		security_skb_classify_flow(skb, &fl);
+		if (ip_route_output_key(net, &rt, &fl))
 			goto out_unlock;
 	}
 	if (icmpv4_xrlim_allow(net, rt, icmp_param->data.icmph.type,
@@ -372,97 +399,6 @@ out_unlock:
 	icmp_xmit_unlock(sk);
 }
 
-static struct rtable *icmp_route_lookup(struct net *net, struct sk_buff *skb_in,
-					struct iphdr *iph,
-					__be32 saddr, u8 tos,
-					int type, int code,
-					struct icmp_bxm *param)
-{
-	struct flowi4 fl4 = {
-		.daddr = (param->replyopts.srr ?
-			  param->replyopts.faddr : iph->saddr),
-		.saddr = saddr,
-		.flowi4_tos = RT_TOS(tos),
-		.flowi4_proto = IPPROTO_ICMP,
-		.fl4_icmp_type = type,
-		.fl4_icmp_code = code,
-	};
-	struct rtable *rt, *rt2;
-	int err;
-
-	security_skb_classify_flow(skb_in, flowi4_to_flowi(&fl4));
-	rt = __ip_route_output_key(net, &fl4);
-	if (IS_ERR(rt))
-		return rt;
-
-	/* No need to clone since we're just using its address. */
-	rt2 = rt;
-
-	if (!fl4.saddr)
-		fl4.saddr = rt->rt_src;
-
-	rt = (struct rtable *) xfrm_lookup(net, &rt->dst,
-					   flowi4_to_flowi(&fl4), NULL, 0);
-	if (!IS_ERR(rt)) {
-		if (rt != rt2)
-			return rt;
-	} else if (PTR_ERR(rt) == -EPERM) {
-		rt = NULL;
-	} else
-		return rt;
-
-	err = xfrm_decode_session_reverse(skb_in, flowi4_to_flowi(&fl4), AF_INET);
-	if (err)
-		goto relookup_failed;
-
-	if (inet_addr_type(net, fl4.saddr) == RTN_LOCAL) {
-		rt2 = __ip_route_output_key(net, &fl4);
-		if (IS_ERR(rt2))
-			err = PTR_ERR(rt2);
-	} else {
-		struct flowi4 fl4_2 = {};
-		unsigned long orefdst;
-
-		fl4_2.daddr = fl4.saddr;
-		rt2 = ip_route_output_key(net, &fl4_2);
-		if (IS_ERR(rt2)) {
-			err = PTR_ERR(rt2);
-			goto relookup_failed;
-		}
-		/* Ugh! */
-		orefdst = skb_in->_skb_refdst; /* save old refdst */
-		err = ip_route_input(skb_in, fl4.daddr, fl4.saddr,
-				     RT_TOS(tos), rt2->dst.dev);
-
-		dst_release(&rt2->dst);
-		rt2 = skb_rtable(skb_in);
-		skb_in->_skb_refdst = orefdst; /* restore old refdst */
-	}
-
-	if (err)
-		goto relookup_failed;
-
-	rt2 = (struct rtable *) xfrm_lookup(net, &rt2->dst,
-					    flowi4_to_flowi(&fl4), NULL,
-					    XFRM_LOOKUP_ICMP);
-	if (!IS_ERR(rt2)) {
-		dst_release(&rt->dst);
-		rt = rt2;
-	} else if (PTR_ERR(rt2) == -EPERM) {
-		if (rt)
-			dst_release(&rt->dst);
-		return rt2;
-	} else {
-		err = PTR_ERR(rt2);
-		goto relookup_failed;
-	}
-	return rt;
-
-relookup_failed:
-	if (rt)
-		return rt;
-	return ERR_PTR(err);
-}
 
 /*
  *	Send an ICMP message in response to a situation
@@ -480,7 +416,7 @@ void icmp_send(struct sk_buff *skb_in, int type, int code, __be32 info)
 	struct iphdr *iph;
 	int room;
 	struct icmp_bxm icmp_param;
-	struct rtable *rt = skb_rtable(skb_in);
+	struct rtable *rt = skb_in->rtable;
 	struct ipcm_cookie ipc;
 	__be32 saddr;
 	u8  tos;
@@ -489,7 +425,7 @@ void icmp_send(struct sk_buff *skb_in, int type, int code, __be32 info)
 
 	if (!rt)
 		goto out;
-	net = dev_net(rt->dst.dev);
+	net = dev_net(rt->u.dst.dev);
 
 	/*
 	 *	Find the original header. It is expected to be valid, of course.
@@ -565,16 +501,15 @@ void icmp_send(struct sk_buff *skb_in, int type, int code, __be32 info)
 	if (!(rt->rt_flags & RTCF_LOCAL)) {
 		struct net_device *dev = NULL;
 
-		rcu_read_lock();
-		if (rt_is_input_route(rt) &&
-		    net->ipv4.sysctl_icmp_errors_use_inbound_ifaddr)
-			dev = dev_get_by_index_rcu(net, rt->rt_iif);
+		if (rt->fl.iif &&
+			net->ipv4.sysctl_icmp_errors_use_inbound_ifaddr)
+			dev = dev_get_by_index(net, rt->fl.iif);
 
-		if (dev)
+		if (dev) {
 			saddr = inet_select_addr(dev, 0, RT_SCOPE_LINK);
-		else
+			dev_put(dev);
+		} else
 			saddr = 0;
-		rcu_read_unlock();
 	}
 
 	tos = icmp_pointers[type].error ? ((iph->tos & IPTOS_TOS_MASK) |
@@ -598,19 +533,100 @@ void icmp_send(struct sk_buff *skb_in, int type, int code, __be32 info)
 	inet_sk(sk)->tos = tos;
 	ipc.addr = iph->saddr;
 	ipc.opt = &icmp_param.replyopts;
-	ipc.tx_flags = 0;
+	ipc.shtx.flags = 0;
 
-	rt = icmp_route_lookup(net, skb_in, iph, saddr, tos,
-			       type, code, &icmp_param);
-	if (IS_ERR(rt))
-		goto out_unlock;
+	{
+		struct flowi fl = {
+			.nl_u = {
+				.ip4_u = {
+					.daddr = icmp_param.replyopts.srr ?
+						icmp_param.replyopts.faddr :
+						iph->saddr,
+					.saddr = saddr,
+					.tos = RT_TOS(tos)
+				}
+			},
+			.proto = IPPROTO_ICMP,
+			.uli_u = {
+				.icmpt = {
+					.type = type,
+					.code = code
+				}
+			}
+		};
+		int err;
+		struct rtable *rt2;
 
+		security_skb_classify_flow(skb_in, &fl);
+		if (__ip_route_output_key(net, &rt, &fl))
+			goto out_unlock;
+
+		/* No need to clone since we're just using its address. */
+		rt2 = rt;
+
+		err = xfrm_lookup(net, (struct dst_entry **)&rt, &fl, NULL, 0);
+		switch (err) {
+		case 0:
+			if (rt != rt2)
+				goto route_done;
+			break;
+		case -EPERM:
+			rt = NULL;
+			break;
+		default:
+			goto out_unlock;
+		}
+
+		if (xfrm_decode_session_reverse(skb_in, &fl, AF_INET))
+			goto relookup_failed;
+
+		if (inet_addr_type(net, fl.fl4_src) == RTN_LOCAL)
+			err = __ip_route_output_key(net, &rt2, &fl);
+		else {
+			struct flowi fl2 = {};
+			struct dst_entry *odst;
+
+			fl2.fl4_dst = fl.fl4_src;
+			if (ip_route_output_key(net, &rt2, &fl2))
+				goto relookup_failed;
+
+			/* Ugh! */
+			odst = skb_in->dst;
+			err = ip_route_input(skb_in, fl.fl4_dst, fl.fl4_src,
+					     RT_TOS(tos), rt2->u.dst.dev);
+
+			dst_release(&rt2->u.dst);
+			rt2 = skb_in->rtable;
+			skb_in->dst = odst;
+		}
+
+		if (err)
+			goto relookup_failed;
+
+		err = xfrm_lookup(net, (struct dst_entry **)&rt2, &fl, NULL,
+				  XFRM_LOOKUP_ICMP);
+		switch (err) {
+		case 0:
+			dst_release(&rt->u.dst);
+			rt = rt2;
+			break;
+		case -EPERM:
+			goto ende;
+		default:
+relookup_failed:
+			if (!rt)
+				goto out_unlock;
+			break;
+		}
+	}
+
+route_done:
 	if (!icmpv4_xrlim_allow(net, rt, type, code))
 		goto ende;
 
 	/* RFC says return as much as we can without exceeding 576 bytes. */
 
-	room = dst_mtu(&rt->dst);
+	room = dst_mtu(&rt->u.dst);
 	if (room > 576)
 		room = 576;
 	room -= sizeof(struct iphdr) + icmp_param.replyopts.optlen;
@@ -628,7 +644,6 @@ out_unlock:
 	icmp_xmit_unlock(sk);
 out:;
 }
-EXPORT_SYMBOL(icmp_send);
 
 
 /*
@@ -640,11 +655,11 @@ static void icmp_unreach(struct sk_buff *skb)
 	struct iphdr *iph;
 	struct icmphdr *icmph;
 	int hash, protocol;
-	const struct net_protocol *ipprot;
+	struct net_protocol *ipprot;
 	u32 info = 0;
 	struct net *net;
 
-	net = dev_net(skb_dst(skb)->dev);
+	net = dev_net(skb->dst->dev);
 
 	/*
 	 *	Incomplete header ?
@@ -704,7 +719,7 @@ static void icmp_unreach(struct sk_buff *skb)
 	 */
 
 	/*
-	 *	Check the other end isn't violating RFC 1122. Some routers send
+	 *	Check the other end isnt violating RFC 1122. Some routers send
 	 *	bogus responses to broadcast frames. If you see this message
 	 *	first check your netmask matches at both ends, if it does then
 	 *	get the other vendor to fix their kit.
@@ -807,7 +822,7 @@ static void icmp_echo(struct sk_buff *skb)
 {
 	struct net *net;
 
-	net = dev_net(skb_dst(skb)->dev);
+	net = dev_net(skb->dst->dev);
 	if (!net->ipv4.sysctl_icmp_echo_ignore_all) {
 		struct icmp_bxm icmp_param;
 
@@ -858,7 +873,7 @@ static void icmp_timestamp(struct sk_buff *skb)
 out:
 	return;
 out_err:
-	ICMP_INC_STATS_BH(dev_net(skb_dst(skb)->dev), ICMP_MIB_INERRORS);
+	ICMP_INC_STATS_BH(dev_net(skb->dst->dev), ICMP_MIB_INERRORS);
 	goto out;
 }
 
@@ -907,23 +922,22 @@ static void icmp_address(struct sk_buff *skb)
 /*
  * RFC1812 (4.3.3.9).	A router SHOULD listen all replies, and complain
  *			loudly if an inconsistency is found.
- * called with rcu_read_lock()
  */
 
 static void icmp_address_reply(struct sk_buff *skb)
 {
-	struct rtable *rt = skb_rtable(skb);
+	struct rtable *rt = skb->rtable;
 	struct net_device *dev = skb->dev;
 	struct in_device *in_dev;
 	struct in_ifaddr *ifa;
 
 	if (skb->len < 4 || !(rt->rt_flags&RTCF_DIRECTSRC))
-		return;
+		goto out;
 
-	in_dev = __in_dev_get_rcu(dev);
+	in_dev = in_dev_get(dev);
 	if (!in_dev)
-		return;
-
+		goto out;
+	rcu_read_lock();
 	if (in_dev->ifa_list &&
 	    IN_DEV_LOG_MARTIANS(in_dev) &&
 	    IN_DEV_FORWARD(in_dev)) {
@@ -941,6 +955,9 @@ static void icmp_address_reply(struct sk_buff *skb)
 			       mp, dev->name, &rt->rt_src);
 		}
 	}
+	rcu_read_unlock();
+	in_dev_put(in_dev);
+out:;
 }
 
 static void icmp_discard(struct sk_buff *skb)
@@ -953,8 +970,8 @@ static void icmp_discard(struct sk_buff *skb)
 int icmp_rcv(struct sk_buff *skb)
 {
 	struct icmphdr *icmph;
-	struct rtable *rt = skb_rtable(skb);
-	struct net *net = dev_net(rt->dst.dev);
+	struct rtable *rt = skb->rtable;
+	struct net *net = dev_net(rt->u.dst.dev);
 
 	if (!xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb)) {
 		struct sec_path *sp = skb_sec_path(skb);
@@ -1148,10 +1165,6 @@ static int __net_init icmp_sk_init(struct net *net)
 		sk->sk_sndbuf =
 			(2 * ((64 * 1024) + sizeof(struct sk_buff)));
 
-		/*
-		 * Speedup sock_wfree()
-		 */
-		sock_set_flag(sk, SOCK_USE_WRITE_QUEUE);
 		inet_sk(sk)->pmtudisc = IP_PMTUDISC_DONT;
 	}
 
@@ -1196,3 +1209,7 @@ int __init icmp_init(void)
 {
 	return register_pernet_subsys(&icmp_sk_ops);
 }
+
+EXPORT_SYMBOL(icmp_err_convert);
+EXPORT_SYMBOL(icmp_send);
+EXPORT_SYMBOL(xrlim_allow);

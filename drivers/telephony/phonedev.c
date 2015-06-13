@@ -23,6 +23,7 @@
 #include <linux/errno.h>
 #include <linux/phonedev.h>
 #include <linux/init.h>
+#include <linux/smp_lock.h>
 #include <asm/uaccess.h>
 #include <asm/system.h>
 
@@ -130,7 +131,6 @@ static const struct file_operations phone_fops =
 {
 	.owner		= THIS_MODULE,
 	.open		= phone_open,
-	.llseek		= noop_llseek,
 };
 
 /*

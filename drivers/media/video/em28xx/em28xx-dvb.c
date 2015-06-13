@@ -20,24 +20,15 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/slab.h>
 #include <linux/usb.h>
 
 #include "em28xx.h"
 #include <media/v4l2-common.h>
 #include <media/videobuf-vmalloc.h>
-#include <media/tuner.h>
-#include "tuner-simple.h"
 
 #include "lgdt330x.h"
-#include "lgdt3305.h"
 #include "zl10353.h"
 #include "s5h1409.h"
-#include "mt352.h"
-#include "mt352_priv.h" /* FIXME */
-#include "tda1002x.h"
-#include "tda18271.h"
-#include "s921.h"
 
 MODULE_DESCRIPTION("driver for em28xx based DVB cards");
 MODULE_AUTHOR("Mauro Carvalho Chehab <mchehab@infradead.org>");
@@ -55,6 +46,7 @@ if (debug >= level) 						\
 } while (0)
 
 #define EM28XX_DVB_NUM_BUFS 5
+#define EM28XX_DVB_MAX_PACKETSIZE 564
 #define EM28XX_DVB_MAX_PACKETS 64
 
 struct em28xx_dvb {
@@ -150,17 +142,14 @@ static int start_streaming(struct em28xx_dvb *dvb)
 {
 	int rc;
 	struct em28xx *dev = dvb->adapter.priv;
-	int max_dvb_packet_size;
 
 	usb_set_interface(dev->udev, 0, 1);
 	rc = em28xx_set_mode(dev, EM28XX_DIGITAL_MODE);
 	if (rc < 0)
 		return rc;
 
-	max_dvb_packet_size = em28xx_isoc_dvb_max_packetsize(dev);
-
 	return em28xx_init_isoc(dev, EM28XX_DVB_MAX_PACKETS,
-				EM28XX_DVB_NUM_BUFS, max_dvb_packet_size,
+				EM28XX_DVB_NUM_BUFS, EM28XX_DVB_MAX_PACKETSIZE,
 				dvb_isoc_copy);
 }
 
@@ -234,22 +223,6 @@ static struct lgdt330x_config em2880_lgdt3303_dev = {
 	.demod_chip = LGDT3303,
 };
 
-static struct lgdt3305_config em2870_lgdt3304_dev = {
-	.i2c_addr           = 0x0e,
-	.demod_chip         = LGDT3304,
-	.spectral_inversion = 1,
-	.deny_i2c_rptr      = 1,
-	.mpeg_mode          = LGDT3305_MPEG_PARALLEL,
-	.tpclk_edge         = LGDT3305_TPCLK_FALLING_EDGE,
-	.tpvalid_polarity   = LGDT3305_TP_VALID_HIGH,
-	.vsb_if_khz         = 3250,
-	.qam_if_khz         = 4000,
-};
-
-static struct s921_config sharp_isdbt = {
-	.demod_address = 0x30 >> 1
-};
-
 static struct zl10353_config em28xx_zl10353_with_xc3028 = {
 	.demod_address = (0x1e >> 1),
 	.no_tuner = 1,
@@ -266,71 +239,12 @@ static struct s5h1409_config em28xx_s5h1409_with_xc3028 = {
 	.mpeg_timing   = S5H1409_MPEGTIMING_CONTINOUS_NONINVERTING_CLOCK
 };
 
-static struct tda18271_std_map kworld_a340_std_map = {
-	.atsc_6   = { .if_freq = 3250, .agc_mode = 3, .std = 0,
-		      .if_lvl = 1, .rfagc_top = 0x37, },
-	.qam_6    = { .if_freq = 4000, .agc_mode = 3, .std = 1,
-		      .if_lvl = 1, .rfagc_top = 0x37, },
-};
-
-static struct tda18271_config kworld_a340_config = {
-	.std_map           = &kworld_a340_std_map,
-};
-
-static struct zl10353_config em28xx_zl10353_xc3028_no_i2c_gate = {
-	.demod_address = (0x1e >> 1),
-	.no_tuner = 1,
-	.disable_i2c_gate_ctrl = 1,
-	.parallel_ts = 1,
-	.if2 = 45600,
-};
-
 #ifdef EM28XX_DRX397XD_SUPPORT
 /* [TODO] djh - not sure yet what the device config needs to contain */
 static struct drx397xD_config em28xx_drx397xD_with_xc3028 = {
 	.demod_address = (0xe0 >> 1),
 };
 #endif
-
-static int mt352_terratec_xs_init(struct dvb_frontend *fe)
-{
-	/* Values extracted from a USB trace of the Terratec Windows driver */
-	static u8 clock_config[]   = { CLOCK_CTL,  0x38, 0x2c };
-	static u8 reset[]          = { RESET,      0x80 };
-	static u8 adc_ctl_1_cfg[]  = { ADC_CTL_1,  0x40 };
-	static u8 agc_cfg[]        = { AGC_TARGET, 0x28, 0xa0 };
-	static u8 input_freq_cfg[] = { INPUT_FREQ_1, 0x31, 0xb8 };
-	static u8 rs_err_cfg[]     = { RS_ERR_PER_1, 0x00, 0x4d };
-	static u8 capt_range_cfg[] = { CAPT_RANGE, 0x32 };
-	static u8 trl_nom_cfg[]    = { TRL_NOMINAL_RATE_1, 0x64, 0x00 };
-	static u8 tps_given_cfg[]  = { TPS_GIVEN_1, 0x40, 0x80, 0x50 };
-	static u8 tuner_go[]       = { TUNER_GO, 0x01};
-
-	mt352_write(fe, clock_config,   sizeof(clock_config));
-	udelay(200);
-	mt352_write(fe, reset,          sizeof(reset));
-	mt352_write(fe, adc_ctl_1_cfg,  sizeof(adc_ctl_1_cfg));
-	mt352_write(fe, agc_cfg,        sizeof(agc_cfg));
-	mt352_write(fe, input_freq_cfg, sizeof(input_freq_cfg));
-	mt352_write(fe, rs_err_cfg,     sizeof(rs_err_cfg));
-	mt352_write(fe, capt_range_cfg, sizeof(capt_range_cfg));
-	mt352_write(fe, trl_nom_cfg,    sizeof(trl_nom_cfg));
-	mt352_write(fe, tps_given_cfg,  sizeof(tps_given_cfg));
-	mt352_write(fe, tuner_go,       sizeof(tuner_go));
-	return 0;
-}
-
-static struct mt352_config terratec_xs_mt352_cfg = {
-	.demod_address = (0x1e >> 1),
-	.no_tuner = 1,
-	.if2 = 45600,
-	.demod_init = mt352_terratec_xs_init,
-};
-
-static struct tda10023_config em28xx_tda10023_config = {
-	.demod_address = 0x0c,
-	.invert = 1,
-};
 
 /* ------------------------------------------------------------------ */
 
@@ -344,20 +258,22 @@ static int attach_xc3028(u8 addr, struct em28xx *dev)
 	cfg.i2c_addr  = addr;
 
 	if (!dev->dvb->frontend) {
-		em28xx_errdev("/2: dvb frontend not attached. "
-				"Can't attach xc3028\n");
+		printk(KERN_ERR "%s/2: dvb frontend not attached. "
+				"Can't attach xc3028\n",
+		       dev->name);
 		return -EINVAL;
 	}
 
 	fe = dvb_attach(xc2028_attach, dev->dvb->frontend, &cfg);
 	if (!fe) {
-		em28xx_errdev("/2: xc3028 attach failed\n");
+		printk(KERN_ERR "%s/2: xc3028 attach failed\n",
+		       dev->name);
 		dvb_frontend_detach(dev->dvb->frontend);
 		dev->dvb->frontend = NULL;
 		return -EINVAL;
 	}
 
-	em28xx_info("%s/2: xc3028 attached\n", dev->name);
+	printk(KERN_INFO "%s/2: xc3028 attached\n", dev->name);
 
 	return 0;
 }
@@ -486,32 +402,20 @@ static int dvb_init(struct em28xx *dev)
 
 	if (!dev->board.has_dvb) {
 		/* This device does not support the extension */
-		printk(KERN_INFO "em28xx_dvb: This device does not support the extension\n");
 		return 0;
 	}
 
 	dvb = kzalloc(sizeof(struct em28xx_dvb), GFP_KERNEL);
 
 	if (dvb == NULL) {
-		em28xx_info("em28xx_dvb: memory allocation failed\n");
+		printk(KERN_INFO "em28xx_dvb: memory allocation failed\n");
 		return -ENOMEM;
 	}
 	dev->dvb = dvb;
 
-	mutex_lock(&dev->lock);
 	em28xx_set_mode(dev, EM28XX_DIGITAL_MODE);
 	/* init frontend */
 	switch (dev->model) {
-	case EM2874_LEADERSHIP_ISDBT:
-		dvb->frontend = dvb_attach(s921_attach,
-				&sharp_isdbt, &dev->i2c_adap);
-
-		if (!dvb->frontend) {
-			result = -EINVAL;
-			goto out_free;
-		}
-
-		break;
 	case EM2883_BOARD_HAUPPAUGE_WINTV_HVR_850:
 	case EM2883_BOARD_HAUPPAUGE_WINTV_HVR_950:
 	case EM2880_BOARD_PINNACLE_PCTV_HD_PRO:
@@ -524,6 +428,8 @@ static int dvb_init(struct em28xx *dev)
 			goto out_free;
 		}
 		break;
+	case EM2880_BOARD_HAUPPAUGE_WINTV_HVR_900:
+	case EM2880_BOARD_TERRATEC_HYBRID_XS:
 	case EM2880_BOARD_KWORLD_DVB_310U:
 		dvb->frontend = dvb_attach(zl10353_attach,
 					   &em28xx_zl10353_with_xc3028,
@@ -533,58 +439,13 @@ static int dvb_init(struct em28xx *dev)
 			goto out_free;
 		}
 		break;
-	case EM2880_BOARD_HAUPPAUGE_WINTV_HVR_900:
-	case EM2882_BOARD_TERRATEC_HYBRID_XS:
-	case EM2880_BOARD_EMPIRE_DUAL_TV:
-		dvb->frontend = dvb_attach(zl10353_attach,
-					   &em28xx_zl10353_xc3028_no_i2c_gate,
-					   &dev->i2c_adap);
-		if (attach_xc3028(0x61, dev) < 0) {
-			result = -EINVAL;
-			goto out_free;
-		}
-		break;
-	case EM2880_BOARD_TERRATEC_HYBRID_XS:
-	case EM2880_BOARD_TERRATEC_HYBRID_XS_FR:
-	case EM2881_BOARD_PINNACLE_HYBRID_PRO:
-	case EM2882_BOARD_DIKOM_DK300:
-	case EM2882_BOARD_KWORLD_VS_DVBT:
-		dvb->frontend = dvb_attach(zl10353_attach,
-					   &em28xx_zl10353_xc3028_no_i2c_gate,
-					   &dev->i2c_adap);
-		if (dvb->frontend == NULL) {
-			/* This board could have either a zl10353 or a mt352.
-			   If the chip id isn't for zl10353, try mt352 */
-			dvb->frontend = dvb_attach(mt352_attach,
-						   &terratec_xs_mt352_cfg,
-						   &dev->i2c_adap);
-		}
-
-		if (attach_xc3028(0x61, dev) < 0) {
-			result = -EINVAL;
-			goto out_free;
-		}
-		break;
 	case EM2883_BOARD_KWORLD_HYBRID_330U:
-	case EM2882_BOARD_EVGA_INDTUBE:
 		dvb->frontend = dvb_attach(s5h1409_attach,
 					   &em28xx_s5h1409_with_xc3028,
 					   &dev->i2c_adap);
 		if (attach_xc3028(0x61, dev) < 0) {
 			result = -EINVAL;
 			goto out_free;
-		}
-		break;
-	case EM2882_BOARD_KWORLD_ATSC_315U:
-		dvb->frontend = dvb_attach(lgdt330x_attach,
-					   &em2880_lgdt3303_dev,
-					   &dev->i2c_adap);
-		if (dvb->frontend != NULL) {
-			if (!dvb_attach(simple_tuner_attach, dvb->frontend,
-				&dev->i2c_adap, 0x61, TUNER_THOMSON_DTT761X)) {
-				result = -EINVAL;
-				goto out_free;
-			}
 		}
 		break;
 	case EM2880_BOARD_HAUPPAUGE_WINTV_HVR_900_R2:
@@ -600,34 +461,16 @@ static int dvb_init(struct em28xx *dev)
 		}
 		break;
 #endif
-	case EM2870_BOARD_REDDO_DVB_C_USB_BOX:
-		/* Philips CU1216L NIM (Philips TDA10023 + Infineon TUA6034) */
-		dvb->frontend = dvb_attach(tda10023_attach,
-			&em28xx_tda10023_config,
-			&dev->i2c_adap, 0x48);
-		if (dvb->frontend) {
-			if (!dvb_attach(simple_tuner_attach, dvb->frontend,
-				&dev->i2c_adap, 0x60, TUNER_PHILIPS_CU1216L)) {
-				result = -EINVAL;
-				goto out_free;
-			}
-		}
-		break;
-	case EM2870_BOARD_KWORLD_A340:
-		dvb->frontend = dvb_attach(lgdt3305_attach,
-					   &em2870_lgdt3304_dev,
-					   &dev->i2c_adap);
-		if (dvb->frontend != NULL)
-			dvb_attach(tda18271_attach, dvb->frontend, 0x60,
-				   &dev->i2c_adap, &kworld_a340_config);
-		break;
 	default:
-		em28xx_errdev("/2: The frontend of your DVB/ATSC card"
-				" isn't supported yet\n");
+		printk(KERN_ERR "%s/2: The frontend of your DVB/ATSC card"
+				" isn't supported yet\n",
+		       dev->name);
 		break;
 	}
 	if (NULL == dvb->frontend) {
-		em28xx_errdev("/2: frontend initialization failed\n");
+		printk(KERN_ERR
+		       "%s/2: frontend initialization failed\n",
+		       dev->name);
 		result = -EINVAL;
 		goto out_free;
 	}
@@ -640,16 +483,15 @@ static int dvb_init(struct em28xx *dev)
 	if (result < 0)
 		goto out_free;
 
-	em28xx_info("Successfully loaded em28xx-dvb\n");
-ret:
 	em28xx_set_mode(dev, EM28XX_SUSPEND);
-	mutex_unlock(&dev->lock);
-	return result;
+	printk(KERN_INFO "Successfully loaded em28xx-dvb\n");
+	return 0;
 
 out_free:
+	em28xx_set_mode(dev, EM28XX_SUSPEND);
 	kfree(dvb);
 	dev->dvb = NULL;
-	goto ret;
+	return result;
 }
 
 static int dvb_fini(struct em28xx *dev)
@@ -661,7 +503,6 @@ static int dvb_fini(struct em28xx *dev)
 
 	if (dev->dvb) {
 		unregister_dvb(dev->dvb);
-		kfree(dev->dvb);
 		dev->dvb = NULL;
 	}
 

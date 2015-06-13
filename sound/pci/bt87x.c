@@ -637,9 +637,15 @@ static struct snd_kcontrol_new snd_bt87x_capture_boost = {
 static int snd_bt87x_capture_source_info(struct snd_kcontrol *kcontrol,
 					 struct snd_ctl_elem_info *info)
 {
-	static const char *const texts[3] = {"TV Tuner", "FM", "Mic/Line"};
+	static char *texts[3] = {"TV Tuner", "FM", "Mic/Line"};
 
-	return snd_ctl_enum_info(info, 1, 3, texts);
+	info->type = SNDRV_CTL_ELEM_TYPE_ENUMERATED;
+	info->count = 1;
+	info->value.enumerated.items = 3;
+	if (info->value.enumerated.item > 2)
+		info->value.enumerated.item = 2;
+	strcpy(info->value.enumerated.name, texts[info->value.enumerated.item]);
+	return 0;
 }
 
 static int snd_bt87x_capture_source_get(struct snd_kcontrol *kcontrol,
@@ -789,7 +795,7 @@ fail:
 	  .driver_data = SND_BT87X_BOARD_ ## id }
 /* driver_data is the card id for that device */
 
-static DEFINE_PCI_DEVICE_TABLE(snd_bt87x_ids) = {
+static struct pci_device_id snd_bt87x_ids[] = {
 	/* Hauppauge WinTV series */
 	BT_DEVICE(PCI_DEVICE_ID_BROOKTREE_878, 0x0070, 0x13eb, GENERIC),
 	/* Hauppauge WinTV series */
@@ -802,12 +808,8 @@ static DEFINE_PCI_DEVICE_TABLE(snd_bt87x_ids) = {
 	BT_DEVICE(PCI_DEVICE_ID_BROOKTREE_878, 0x1002, 0x0001, GENERIC),
 	/* Leadtek Winfast tv 2000xp delux */
 	BT_DEVICE(PCI_DEVICE_ID_BROOKTREE_878, 0x107d, 0x6606, GENERIC),
-	/* Pinnacle PCTV */
-	BT_DEVICE(PCI_DEVICE_ID_BROOKTREE_878, 0x11bd, 0x0012, GENERIC),
 	/* Voodoo TV 200 */
 	BT_DEVICE(PCI_DEVICE_ID_BROOKTREE_878, 0x121a, 0x3000, GENERIC),
-	/* Askey Computer Corp. MagicTView'99 */
-	BT_DEVICE(PCI_DEVICE_ID_BROOKTREE_878, 0x144f, 0x3000, GENERIC),
 	/* AVerMedia Studio No. 103, 203, ...? */
 	BT_DEVICE(PCI_DEVICE_ID_BROOKTREE_878, 0x1461, 0x0003, AVPHONE98),
 	/* Prolink PixelView PV-M4900 */
@@ -958,7 +960,7 @@ static void __devexit snd_bt87x_remove(struct pci_dev *pci)
 
 /* default entries for all Bt87x cards - it's not exported */
 /* driver_data is set to 0 to call detection */
-static DEFINE_PCI_DEVICE_TABLE(snd_bt87x_default_ids) = {
+static struct pci_device_id snd_bt87x_default_ids[] __devinitdata = {
 	BT_DEVICE(PCI_DEVICE_ID_BROOKTREE_878, PCI_ANY_ID, PCI_ANY_ID, UNKNOWN),
 	BT_DEVICE(PCI_DEVICE_ID_BROOKTREE_879, PCI_ANY_ID, PCI_ANY_ID, UNKNOWN),
 	{ }

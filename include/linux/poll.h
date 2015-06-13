@@ -6,14 +6,12 @@
 #ifdef __KERNEL__
 
 #include <linux/compiler.h>
-#include <linux/ktime.h>
 #include <linux/wait.h>
 #include <linux/string.h>
 #include <linux/fs.h>
-#include <linux/sysctl.h>
+#include <linux/sched.h>
 #include <asm/uaccess.h>
 
-extern struct ctl_table epoll_table[]; /* for sysctl */
 /* ~832 bytes of stack space used max in sys_select/sys_poll before allocating
    additional memory. */
 #define MAX_STACK_ALLOC 832
@@ -34,7 +32,6 @@ typedef void (*poll_queue_proc)(struct file *, wait_queue_head_t *, struct poll_
 
 typedef struct poll_table_struct {
 	poll_queue_proc qproc;
-	unsigned long key;
 } poll_table;
 
 static inline void poll_wait(struct file * filp, wait_queue_head_t * wait_address, poll_table *p)
@@ -46,18 +43,16 @@ static inline void poll_wait(struct file * filp, wait_queue_head_t * wait_addres
 static inline void init_poll_funcptr(poll_table *pt, poll_queue_proc qproc)
 {
 	pt->qproc = qproc;
-	pt->key   = ~0UL; /* all events enabled */
 }
 
 struct poll_table_entry {
 	struct file *filp;
-	unsigned long key;
 	wait_queue_t wait;
 	wait_queue_head_t *wait_address;
 };
 
 /*
- * Structures and helpers for select/poll syscall
+ * Structures and helpers for sys_poll/sys_poll
  */
 struct poll_wqueues {
 	poll_table pt;
@@ -73,8 +68,6 @@ extern void poll_initwait(struct poll_wqueues *pwq);
 extern void poll_freewait(struct poll_wqueues *pwq);
 extern int poll_schedule_timeout(struct poll_wqueues *pwq, int state,
 				 ktime_t *expires, unsigned long slack);
-extern long select_estimate_accuracy(struct timespec *tv);
-
 
 static inline int poll_schedule(struct poll_wqueues *pwq, int state)
 {
@@ -82,7 +75,7 @@ static inline int poll_schedule(struct poll_wqueues *pwq, int state)
 }
 
 /*
- * Scalable version of the fd_set.
+ * Scaleable version of the fd_set.
  */
 
 typedef struct {

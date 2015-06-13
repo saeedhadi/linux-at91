@@ -38,14 +38,13 @@ Devices: [Keithley Metrabyte] DAS6402 (das6402)
 This driver has suffered bitrot.
 */
 
-#include <linux/interrupt.h>
 #include "../comedidev.h"
 
 #include <linux/ioport.h>
 
 #define DAS6402_SIZE 16
 
-#define N_WORDS (3000*64)
+#define N_WORDS 3000*64
 
 #define STOP    0
 #define START   1
@@ -99,28 +98,16 @@ This driver has suffered bitrot.
 #define	C2 0x80
 #define	RWLH 0x30
 
-static int das6402_attach(struct comedi_device *dev,
-			  struct comedi_devconfig *it);
-static int das6402_detach(struct comedi_device *dev);
+static int das6402_attach(struct comedi_device * dev, struct comedi_devconfig * it);
+static int das6402_detach(struct comedi_device * dev);
 static struct comedi_driver driver_das6402 = {
-	.driver_name = "das6402",
-	.module = THIS_MODULE,
-	.attach = das6402_attach,
-	.detach = das6402_detach,
+      driver_name:"das6402",
+      module:THIS_MODULE,
+      attach:das6402_attach,
+      detach:das6402_detach,
 };
 
-static int __init driver_das6402_init_module(void)
-{
-	return comedi_driver_register(&driver_das6402);
-}
-
-static void __exit driver_das6402_cleanup_module(void)
-{
-	comedi_driver_unregister(&driver_das6402);
-}
-
-module_init(driver_das6402_init_module);
-module_exit(driver_das6402_cleanup_module);
+COMEDI_INITCLEANUP(driver_das6402);
 
 struct das6402_private {
 	int ai_bytes_to_read;
@@ -129,10 +116,9 @@ struct das6402_private {
 };
 #define devpriv ((struct das6402_private *)dev->private)
 
-static void das6402_ai_fifo_dregs(struct comedi_device *dev,
-				  struct comedi_subdevice *s);
+static void das6402_ai_fifo_dregs(struct comedi_device * dev, struct comedi_subdevice * s);
 
-static void das6402_setcounter(struct comedi_device *dev)
+static void das6402_setcounter(struct comedi_device * dev)
 {
 	BYTE p;
 	unsigned short ctrlwrd;
@@ -165,7 +151,7 @@ static void das6402_setcounter(struct comedi_device *dev)
 	outb_p(p, dev->iobase + 14);
 }
 
-static irqreturn_t intr_handler(int irq, void *d)
+static irqreturn_t intr_handler(int irq, void *d PT_REGS_ARG)
 {
 	struct comedi_device *dev = d;
 	struct comedi_subdevice *s = dev->subdevices;
@@ -176,7 +162,7 @@ static irqreturn_t intr_handler(int irq, void *d)
 	}
 #ifdef DEBUG
 	printk("das6402: interrupt! das6402_irqcount=%i\n",
-	       devpriv->das6402_irqcount);
+		devpriv->das6402_irqcount);
 	printk("das6402: iobase+2=%i\n", inw_p(dev->iobase + 2));
 #endif
 
@@ -187,7 +173,7 @@ static irqreturn_t intr_handler(int irq, void *d)
 		outb(0x07, dev->iobase + 8);	/* clears all flip-flops */
 #ifdef DEBUG
 		printk("das6402: Got %i samples\n\n",
-		       devpriv->das6402_wordsread - diff);
+			devpriv->das6402_wordsread - diff);
 #endif
 		s->async->events |= COMEDI_CB_EOA;
 		comedi_event(dev, s);
@@ -200,7 +186,7 @@ static irqreturn_t intr_handler(int irq, void *d)
 }
 
 #if 0
-static void das6402_ai_fifo_read(struct comedi_device *dev, short *data, int n)
+static void das6402_ai_fifo_read(struct comedi_device * dev, short * data, int n)
 {
 	int i;
 
@@ -209,8 +195,7 @@ static void das6402_ai_fifo_read(struct comedi_device *dev, short *data, int n)
 }
 #endif
 
-static void das6402_ai_fifo_dregs(struct comedi_device *dev,
-				  struct comedi_subdevice *s)
+static void das6402_ai_fifo_dregs(struct comedi_device * dev, struct comedi_subdevice * s)
 {
 	while (1) {
 		if (!(inb(dev->iobase + 8) & 0x01))
@@ -219,8 +204,7 @@ static void das6402_ai_fifo_dregs(struct comedi_device *dev,
 	}
 }
 
-static int das6402_ai_cancel(struct comedi_device *dev,
-			     struct comedi_subdevice *s)
+static int das6402_ai_cancel(struct comedi_device * dev, struct comedi_subdevice * s)
 {
 	/*
 	 *  This function should reset the board from whatever condition it
@@ -242,8 +226,8 @@ static int das6402_ai_cancel(struct comedi_device *dev,
 }
 
 #ifdef unused
-static int das6402_ai_mode2(struct comedi_device *dev,
-			    struct comedi_subdevice *s, comedi_trig * it)
+static int das6402_ai_mode2(struct comedi_device * dev, struct comedi_subdevice * s,
+	comedi_trig * it)
 {
 	devpriv->das6402_ignoreirq = 1;
 
@@ -265,7 +249,7 @@ static int das6402_ai_mode2(struct comedi_device *dev,
 }
 #endif
 
-static int board_init(struct comedi_device *dev)
+static int board_init(struct comedi_device * dev)
 {
 	BYTE b;
 
@@ -305,18 +289,17 @@ static int board_init(struct comedi_device *dev)
 	return 0;
 }
 
-static int das6402_detach(struct comedi_device *dev)
+static int das6402_detach(struct comedi_device * dev)
 {
 	if (dev->irq)
-		free_irq(dev->irq, dev);
+		comedi_free_irq(dev->irq, dev);
 	if (dev->iobase)
 		release_region(dev->iobase, DAS6402_SIZE);
 
 	return 0;
 }
 
-static int das6402_attach(struct comedi_device *dev,
-			  struct comedi_devconfig *it)
+static int das6402_attach(struct comedi_device * dev, struct comedi_devconfig * it)
 {
 	unsigned int irq;
 	unsigned long iobase;
@@ -341,19 +324,17 @@ static int das6402_attach(struct comedi_device *dev,
 
 	irq = it->options[0];
 	printk(" ( irq = %u )", irq);
-	ret = request_irq(irq, intr_handler, 0, "das6402", dev);
+	ret = comedi_request_irq(irq, intr_handler, 0, "das6402", dev);
 	if (ret < 0) {
 		printk("irq conflict\n");
 		return ret;
 	}
 	dev->irq = irq;
 
-	ret = alloc_private(dev, sizeof(struct das6402_private));
-	if (ret < 0)
+	if ((ret = alloc_private(dev, sizeof(struct das6402_private))) < 0)
 		return ret;
 
-	ret = alloc_subdevices(dev, 1);
-	if (ret < 0)
+	if ((ret = alloc_subdevices(dev, 1)) < 0)
 		return ret;
 
 	/* ai subdevice */
@@ -361,7 +342,7 @@ static int das6402_attach(struct comedi_device *dev,
 	s->type = COMEDI_SUBD_AI;
 	s->subdev_flags = SDF_READABLE | SDF_GROUND;
 	s->n_chan = 8;
-	/* s->trig[2]=das6402_ai_mode2; */
+	//s->trig[2]=das6402_ai_mode2;
 	s->cancel = das6402_ai_cancel;
 	s->maxdata = (1 << 12) - 1;
 	s->len_chanlist = 16;	/* ? */
@@ -371,7 +352,3 @@ static int das6402_attach(struct comedi_device *dev,
 
 	return 0;
 }
-
-MODULE_AUTHOR("Comedi http://www.comedi.org");
-MODULE_DESCRIPTION("Comedi low-level driver");
-MODULE_LICENSE("GPL");

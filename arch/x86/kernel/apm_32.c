@@ -66,7 +66,7 @@
  *    1.5: Fix segment register reloading (in case of bad segments saved
  *         across BIOS call).
  *         Stephen Rothwell
- *    1.6: Cope with compiler/assembler differences.
+ *    1.6: Cope with complier/assembler differences.
  *         Only try to turn off the first display device.
  *         Fix OOPS at power off with no APM BIOS by Jan Echternach
  *                   <echter@informatik.uni-rostock.de>
@@ -140,7 +140,7 @@
  *         is now the way life works).
  *         Fix thinko in suspend() (wrong return).
  *         Notify drivers on critical suspend.
- *         Make kapmd absorb more idle time (Pavel Machek <pavel@ucw.cz>
+ *         Make kapmd absorb more idle time (Pavel Machek <pavel@suse.cz>
  *         modified by sfr).
  *         Disable interrupts while we are suspended (Andy Henroid
  *         <andy_henroid@yahoo.com> fixed by sfr).
@@ -189,8 +189,8 @@
  *   Intel Order Number 241704-001.  Microsoft Part Number 781-110-X01.
  *
  * [This document is available free from Intel by calling 800.628.8686 (fax
- * 916.356.6100) or 800.548.4725; or from
- * http://www.microsoft.com/whdc/archive/amp_12.mspx  It is also
+ * 916.356.6100) or 800.548.4725; or via anonymous ftp from
+ * ftp://ftp.intel.com/pub/IAL/software_specs/apmv11.doc.  It is also
  * available from Microsoft by calling 206.882.8080.]
  *
  * APM 1.2 Reference:
@@ -204,6 +204,7 @@
 #include <linux/module.h>
 
 #include <linux/poll.h>
+#include <linux/smp_lock.h>
 #include <linux/types.h>
 #include <linux/stddef.h>
 #include <linux/timer.h>
@@ -227,8 +228,6 @@
 #include <linux/suspend.h>
 #include <linux/kthread.h>
 #include <linux/jiffies.h>
-#include <linux/acpi.h>
-#include <linux/syscore_ops.h>
 
 #include <asm/system.h>
 #include <asm/uaccess.h>
@@ -404,16 +403,7 @@ static DECLARE_WAIT_QUEUE_HEAD(apm_waitqueue);
 static DECLARE_WAIT_QUEUE_HEAD(apm_suspend_waitqueue);
 static struct apm_user *user_list;
 static DEFINE_SPINLOCK(user_list_lock);
-static DEFINE_MUTEX(apm_mutex);
-
-/*
- * Set up a segment that references the real mode segment 0x40
- * that extends up to the end of page zero (that we have reserved).
- * This is for buggy BIOS's that refer to (real mode) segment 0x40
- * even though they are called in protected mode.
- */
-static struct desc_struct bad_bios_desc = GDT_ENTRY_INIT(0x4092,
-			(unsigned long)__va(0x400UL), PAGE_SIZE - 0x400 - 1);
+static const struct desc_struct	bad_bios_desc = { { { 0, 0x00409200 } } };
 
 static const char driver_version[] = "1.16ac";	/* no spaces */
 
@@ -821,7 +811,7 @@ static int apm_do_idle(void)
 	u8 ret = 0;
 	int idled = 0;
 	int polling;
-	int err = 0;
+	int err;
 
 	polling = !!(current_thread_info()->status & TS_POLLING);
 	if (polling) {
@@ -977,10 +967,20 @@ recalc:
 
 static void apm_power_off(void)
 {
+	unsigned char po_bios_call[] = {
+		0xb8, 0x00, 0x10,	/* movw  $0x1000,ax  */
+		0x8e, 0xd0,		/* movw  ax,ss       */
+		0xbc, 0x00, 0xf0,	/* movw  $0xf000,sp  */
+		0xb8, 0x07, 0x53,	/* movw  $0x5307,ax  */
+		0xbb, 0x01, 0x00,	/* movw  $0x0001,bx  */
+		0xb9, 0x03, 0x00,	/* movw  $0x0003,cx  */
+		0xcd, 0x15		/* int   $0x15       */
+	};
+
 	/* Some bioses don't like being called from CPU != 0 */
 	if (apm_info.realmode_power_off) {
 		set_cpus_allowed_ptr(current, cpumask_of(0));
-		machine_real_restart(MRR_APM);
+		machine_real_restart(po_bios_call, sizeof(po_bios_call));
 	} else {
 		(void)set_system_power_state(APM_STATE_OFF);
 	}
@@ -1216,7 +1216,7 @@ static void reinit_timer(void)
 #ifdef INIT_TIMER_AFTER_SUSPEND
 	unsigned long flags;
 
-	raw_spin_lock_irqsave(&i8253_lock, flags);
+	spin_lock_irqsave(&i8253_lock, flags);
 	/* set the clock to HZ */
 	outb_pit(0x34, PIT_MODE);		/* binary, mode 2, LSB/MSB, ch 0 */
 	udelay(10);
@@ -1224,7 +1224,7 @@ static void reinit_timer(void)
 	udelay(10);
 	outb_pit(LATCH >> 8, PIT_CH0);	/* MSB */
 	udelay(10);
-	raw_spin_unlock_irqrestore(&i8253_lock, flags);
+	spin_unlock_irqrestore(&i8253_lock, flags);
 #endif
 }
 
@@ -1233,13 +1233,12 @@ static int suspend(int vetoable)
 	int err;
 	struct apm_user	*as;
 
-	dpm_suspend_start(PMSG_SUSPEND);
+	device_suspend(PMSG_SUSPEND);
 
-	dpm_suspend_noirq(PMSG_SUSPEND);
+	device_power_down(PMSG_SUSPEND);
 
 	local_irq_disable();
 	sysdev_suspend(PMSG_SUSPEND);
-	syscore_suspend();
 
 	local_irq_enable();
 
@@ -1257,13 +1256,12 @@ static int suspend(int vetoable)
 		apm_error("suspend", err);
 	err = (err == APM_SUCCESS) ? 0 : -EIO;
 
-	syscore_resume();
 	sysdev_resume();
 	local_irq_enable();
 
-	dpm_resume_noirq(PMSG_RESUME);
+	device_power_up(PMSG_RESUME);
 
-	dpm_resume_end(PMSG_RESUME);
+	device_resume(PMSG_RESUME);
 	queue_event(APM_NORMAL_RESUME, NULL);
 	spin_lock(&user_list_lock);
 	for (as = user_list; as != NULL; as = as->next) {
@@ -1279,11 +1277,10 @@ static void standby(void)
 {
 	int err;
 
-	dpm_suspend_noirq(PMSG_SUSPEND);
+	device_power_down(PMSG_SUSPEND);
 
 	local_irq_disable();
 	sysdev_suspend(PMSG_SUSPEND);
-	syscore_suspend();
 	local_irq_enable();
 
 	err = set_system_power_state(APM_STATE_STANDBY);
@@ -1291,11 +1288,10 @@ static void standby(void)
 		apm_error("standby", err);
 
 	local_irq_disable();
-	syscore_resume();
 	sysdev_resume();
 	local_irq_enable();
 
-	dpm_resume_noirq(PMSG_RESUME);
+	device_power_up(PMSG_RESUME);
 }
 
 static apm_event_t get_event(void)
@@ -1380,7 +1376,7 @@ static void check_events(void)
 			ignore_bounce = 1;
 			if ((event != APM_NORMAL_RESUME)
 			    || (ignore_normal_resume == 0)) {
-				dpm_resume_end(PMSG_RESUME);
+				device_resume(PMSG_RESUME);
 				queue_event(event, NULL);
 			}
 			ignore_normal_resume = 0;
@@ -1527,7 +1523,7 @@ static long do_ioctl(struct file *filp, u_int cmd, u_long arg)
 		return -EPERM;
 	switch (cmd) {
 	case APM_IOC_STANDBY:
-		mutex_lock(&apm_mutex);
+		lock_kernel();
 		if (as->standbys_read > 0) {
 			as->standbys_read--;
 			as->standbys_pending--;
@@ -1536,10 +1532,10 @@ static long do_ioctl(struct file *filp, u_int cmd, u_long arg)
 			queue_event(APM_USER_STANDBY, as);
 		if (standbys_pending <= 0)
 			standby();
-		mutex_unlock(&apm_mutex);
+		unlock_kernel();
 		break;
 	case APM_IOC_SUSPEND:
-		mutex_lock(&apm_mutex);
+		lock_kernel();
 		if (as->suspends_read > 0) {
 			as->suspends_read--;
 			as->suspends_pending--;
@@ -1548,14 +1544,13 @@ static long do_ioctl(struct file *filp, u_int cmd, u_long arg)
 			queue_event(APM_USER_SUSPEND, as);
 		if (suspends_pending <= 0) {
 			ret = suspend(1);
-			mutex_unlock(&apm_mutex);
 		} else {
 			as->suspend_wait = 1;
-			mutex_unlock(&apm_mutex);
 			wait_event_interruptible(apm_suspend_waitqueue,
 					as->suspend_wait == 0);
 			ret = as->suspend_result;
 		}
+		unlock_kernel();
 		return ret;
 	default:
 		return -ENOTTY;
@@ -1605,10 +1600,12 @@ static int do_open(struct inode *inode, struct file *filp)
 {
 	struct apm_user *as;
 
+	lock_kernel();
 	as = kmalloc(sizeof(*as), GFP_KERNEL);
 	if (as == NULL) {
 		printk(KERN_ERR "apm: cannot allocate struct of size %d bytes\n",
 		       sizeof(*as));
+		       unlock_kernel();
 		return -ENOMEM;
 	}
 	as->magic = APM_BIOS_MAGIC;
@@ -1630,6 +1627,7 @@ static int do_open(struct inode *inode, struct file *filp)
 	user_list = as;
 	spin_unlock(&user_list_lock);
 	filp->private_data = as;
+	unlock_kernel();
 	return 0;
 }
 
@@ -1922,7 +1920,6 @@ static const struct file_operations apm_bios_fops = {
 	.unlocked_ioctl	= do_ioctl,
 	.open		= do_open,
 	.release	= do_release,
-	.llseek		= noop_llseek,
 };
 
 static struct miscdevice apm_device = {
@@ -1989,8 +1986,8 @@ static int __init apm_is_horked_d850md(const struct dmi_system_id *d)
 		apm_info.disabled = 1;
 		printk(KERN_INFO "%s machine detected. "
 		       "Disabling APM.\n", d->ident);
-		printk(KERN_INFO "This bug is fixed in bios P15 which is available for\n");
-		printk(KERN_INFO "download from support.intel.com\n");
+		printk(KERN_INFO "This bug is fixed in bios P15 which is available for \n");
+		printk(KERN_INFO "download from support.intel.com \n");
 	}
 	return 0;
 }
@@ -2327,11 +2324,21 @@ static int __init apm_init(void)
 		apm_info.disabled = 1;
 		return -ENODEV;
 	}
-	if (!acpi_disabled) {
+	if (pm_flags & PM_ACPI) {
 		printk(KERN_NOTICE "apm: overridden by ACPI.\n");
 		apm_info.disabled = 1;
 		return -ENODEV;
 	}
+	pm_flags |= PM_APM;
+
+	/*
+	 * Set up a segment that references the real mode segment 0x40
+	 * that extends up to the end of page zero (that we have reserved).
+	 * This is for buggy BIOS's that refer to (real mode) segment 0x40
+	 * even though they are called in protected mode.
+	 */
+	set_base(bad_bios_desc, __va((unsigned long)0x40 << 4));
+	_set_limit((char *)&bad_bios_desc, 4095 - (0x40 << 4));
 
 	/*
 	 * Set up the long jump entry point to the APM BIOS, which is called
@@ -2351,12 +2358,12 @@ static int __init apm_init(void)
 	 * code to that CPU.
 	 */
 	gdt = get_cpu_gdt_table(0);
-	set_desc_base(&gdt[APM_CS >> 3],
-		 (unsigned long)__va((unsigned long)apm_info.bios.cseg << 4));
-	set_desc_base(&gdt[APM_CS_16 >> 3],
-		 (unsigned long)__va((unsigned long)apm_info.bios.cseg_16 << 4));
-	set_desc_base(&gdt[APM_DS >> 3],
-		 (unsigned long)__va((unsigned long)apm_info.bios.dseg << 4));
+	set_base(gdt[APM_CS >> 3],
+		 __va((unsigned long)apm_info.bios.cseg << 4));
+	set_base(gdt[APM_CS_16 >> 3],
+		 __va((unsigned long)apm_info.bios.cseg_16 << 4));
+	set_base(gdt[APM_DS >> 3],
+		 __va((unsigned long)apm_info.bios.dseg << 4));
 
 	proc_create("apm", 0, NULL, &apm_file_ops);
 
@@ -2423,6 +2430,7 @@ static void __exit apm_exit(void)
 		kthread_stop(kapmd_task);
 		kapmd_task = NULL;
 	}
+	pm_flags &= ~PM_APM;
 }
 
 module_init(apm_init);

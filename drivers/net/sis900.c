@@ -36,7 +36,7 @@
    Rev 1.07.06 Nov.  7 2000 Jeff Garzik <jgarzik@pobox.com> some bug fix and cleaning
    Rev 1.07.05 Nov.  6 2000 metapirat<metapirat@gmx.de> contribute media type select by ifconfig
    Rev 1.07.04 Sep.  6 2000 Lei-Chun Chang added ICS1893 PHY support
-   Rev 1.07.03 Aug. 24 2000 Lei-Chun Chang (lcchang@sis.com.tw) modified 630E equalizer workaround rule
+   Rev 1.07.03 Aug. 24 2000 Lei-Chun Chang (lcchang@sis.com.tw) modified 630E eqaulizer workaround rule
    Rev 1.07.01 Aug. 08 2000 Ollie Lho minor update for SiS 630E and SiS 630E A1
    Rev 1.07    Mar. 07 2000 Ollie Lho bug fix in Rx buffer ring
    Rev 1.06.04 Feb. 11 2000 Jeff Garzik <jgarzik@pobox.com> softnet and init for kernel 2.4
@@ -52,7 +52,6 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/string.h>
 #include <linux/timer.h>
 #include <linux/errno.h>
@@ -106,7 +105,7 @@ static const char * card_names[] = {
 	"SiS 900 PCI Fast Ethernet",
 	"SiS 7016 PCI Fast Ethernet"
 };
-static DEFINE_PCI_DEVICE_TABLE(sis900_pci_tbl) = {
+static struct pci_device_id sis900_pci_tbl [] = {
 	{PCI_VENDOR_ID_SI, PCI_DEVICE_ID_SI_900,
 	 PCI_ANY_ID, PCI_ANY_ID, 0, 0, SIS_900},
 	{PCI_VENDOR_ID_SI, PCI_DEVICE_ID_SI_7016,
@@ -215,8 +214,7 @@ static void sis900_check_mode (struct net_device *net_dev, struct mii_phy *mii_p
 static void sis900_tx_timeout(struct net_device *net_dev);
 static void sis900_init_tx_ring(struct net_device *net_dev);
 static void sis900_init_rx_ring(struct net_device *net_dev);
-static netdev_tx_t sis900_start_xmit(struct sk_buff *skb,
-				     struct net_device *net_dev);
+static int sis900_start_xmit(struct sk_buff *skb, struct net_device *net_dev);
 static int sis900_rx(struct net_device *net_dev);
 static void sis900_finish_xmit (struct net_device *net_dev);
 static irqreturn_t sis900_interrupt(int irq, void *dev_instance);
@@ -240,8 +238,7 @@ static const struct ethtool_ops sis900_ethtool_ops;
  *	@net_dev: the net device to get address for
  *
  *	Older SiS900 and friends, use EEPROM to store MAC address.
- *	MAC address is read from read_eeprom() into @net_dev->dev_addr and
- *	@net_dev->perm_addr.
+ *	MAC address is read from read_eeprom() into @net_dev->dev_addr.
  */
 
 static int __devinit sis900_get_mac_addr(struct pci_dev * pci_dev, struct net_device *net_dev)
@@ -262,9 +259,6 @@ static int __devinit sis900_get_mac_addr(struct pci_dev * pci_dev, struct net_de
 	for (i = 0; i < 3; i++)
 	        ((u16 *)(net_dev->dev_addr))[i] = read_eeprom(ioaddr, i+EEPROMMACAddr);
 
-	/* Store MAC Address in perm_addr */
-	memcpy(net_dev->perm_addr, net_dev->dev_addr, ETH_ALEN);
-
 	return 1;
 }
 
@@ -275,8 +269,7 @@ static int __devinit sis900_get_mac_addr(struct pci_dev * pci_dev, struct net_de
  *
  *	SiS630E model, use APC CMOS RAM to store MAC address.
  *	APC CMOS RAM is accessed through ISA bridge.
- *	MAC address is read into @net_dev->dev_addr and
- *	@net_dev->perm_addr.
+ *	MAC address is read into @net_dev->dev_addr.
  */
 
 static int __devinit sis630e_get_mac_addr(struct pci_dev * pci_dev,
@@ -301,10 +294,6 @@ static int __devinit sis630e_get_mac_addr(struct pci_dev * pci_dev,
 		outb(0x09 + i, 0x70);
 		((u8 *)(net_dev->dev_addr))[i] = inb(0x71);
 	}
-
-	/* Store MAC Address in perm_addr */
-	memcpy(net_dev->perm_addr, net_dev->dev_addr, ETH_ALEN);
-
 	pci_write_config_byte(isa_bridge, 0x48, reg & ~0x40);
 	pci_dev_put(isa_bridge);
 
@@ -319,7 +308,7 @@ static int __devinit sis630e_get_mac_addr(struct pci_dev * pci_dev,
  *
  *	SiS635 model, set MAC Reload Bit to load Mac address from APC
  *	to rfdr. rfdr is accessed through rfcr. MAC address is read into
- *	@net_dev->dev_addr and @net_dev->perm_addr.
+ *	@net_dev->dev_addr.
  */
 
 static int __devinit sis635_get_mac_addr(struct pci_dev * pci_dev,
@@ -343,9 +332,6 @@ static int __devinit sis635_get_mac_addr(struct pci_dev * pci_dev,
 		*( ((u16 *)net_dev->dev_addr) + i) = inw(ioaddr + rfdr);
 	}
 
-	/* Store MAC Address in perm_addr */
-	memcpy(net_dev->perm_addr, net_dev->dev_addr, ETH_ALEN);
-
 	/* enable packet filtering */
 	outl(rfcrSave | RFEN, rfcr + ioaddr);
 
@@ -365,7 +351,7 @@ static int __devinit sis635_get_mac_addr(struct pci_dev * pci_dev,
  *	EEDONE signal to refuse EEPROM access by LAN.
  *	The EEPROM map of SiS962 or SiS963 is different to SiS900.
  *	The signature field in SiS962 or SiS963 spec is meaningless.
- *	MAC address is read into @net_dev->dev_addr and @net_dev->perm_addr.
+ *	MAC address is read into @net_dev->dev_addr.
  */
 
 static int __devinit sis96x_get_mac_addr(struct pci_dev * pci_dev,
@@ -383,9 +369,6 @@ static int __devinit sis96x_get_mac_addr(struct pci_dev * pci_dev,
 			/* get MAC address from EEPROM */
 			for (i = 0; i < 3; i++)
 			        ((u16 *)(net_dev->dev_addr))[i] = read_eeprom(ioaddr, i+EEPROMMACAddr);
-
-			/* Store MAC Address in perm_addr */
-			memcpy(net_dev->perm_addr, net_dev->dev_addr, ETH_ALEN);
 
 			outl(EEDONE, ee_addr);
 			return 1;
@@ -510,7 +493,7 @@ static int __devinit sis900_probe(struct pci_dev *pci_dev,
 	sis_priv->mii_info.reg_num_mask = 0x1f;
 
 	/* Get Mac address according to the chip revision */
-	sis_priv->chipset_rev = pci_dev->revision;
+	pci_read_config_byte(pci_dev, PCI_CLASS_REVISION, &(sis_priv->chipset_rev));
 	if(netif_msg_probe(sis_priv))
 		printk(KERN_DEBUG "%s: detected revision %2.2x, "
 				"trying to get MAC address...\n",
@@ -547,7 +530,7 @@ static int __devinit sis900_probe(struct pci_dev *pci_dev,
 	/* save our host bridge revision */
 	dev = pci_get_device(PCI_VENDOR_ID_SI, PCI_DEVICE_ID_SI_630, NULL);
 	if (dev) {
-		sis_priv->host_bridge_rev = dev->revision;
+		pci_read_config_byte(dev, PCI_CLASS_REVISION, &sis_priv->host_bridge_rev);
 		pci_dev_put(dev);
 	}
 
@@ -847,7 +830,7 @@ static u16 __devinit read_eeprom(long ioaddr, int location)
 	outl(0, ee_addr);
 	eeprom_delay();
 
-	return retval;
+	return (retval);
 }
 
 /* Read and write the MII management registers using software-generated
@@ -873,6 +856,7 @@ static void mdio_reset(long mdio_addr)
 		outl(MDDIR | MDIO | MDC, mdio_addr);
 		mdio_delay();
 	}
+	return;
 }
 
 /**
@@ -967,6 +951,8 @@ static void mdio_write(struct net_device *net_dev, int phy_id, int location,
 		mdio_delay();
 	}
 	outl(0x00, mdio_addr);
+
+	return;
 }
 
 
@@ -1028,7 +1014,7 @@ sis900_open(struct net_device *net_dev)
 	/* Equalizer workaround Rule */
 	sis630_set_eq(net_dev, sis_priv->chipset_rev);
 
-	ret = request_irq(net_dev->irq, sis900_interrupt, IRQF_SHARED,
+	ret = request_irq(net_dev->irq, &sis900_interrupt, IRQF_SHARED,
 						net_dev->name, net_dev);
 	if (ret)
 		return ret;
@@ -1057,7 +1043,7 @@ sis900_open(struct net_device *net_dev)
 	init_timer(&sis_priv->timer);
 	sis_priv->timer.expires = jiffies + HZ;
 	sis_priv->timer.data = (unsigned long)net_dev;
-	sis_priv->timer.function = sis900_timer;
+	sis_priv->timer.function = &sis900_timer;
 	add_timer(&sis_priv->timer);
 
 	return 0;
@@ -1195,7 +1181,7 @@ sis900_init_rx_ring(struct net_device *net_dev)
  *
  *	630E equalizer workaround rule(Cyrus Huang 08/15)
  *	PHY register 14h(Test)
- *	Bit 14: 0 -- Automatically detect (default)
+ *	Bit 14: 0 -- Automatically dectect (default)
  *		1 -- Manually set Equalizer filter
  *	Bit 13: 0 -- (Default)
  *		1 -- Speed up convergence of equalizer setting
@@ -1207,7 +1193,7 @@ sis900_init_rx_ring(struct net_device *net_dev)
  *	Then set equalizer value, and set Bit 14 to 1, Bit 9 to 0
  *	Link Off:Set Bit 13 to 1, Bit 14 to 0
  *	Calculate Equalizer value:
- *	When Link is ON and Bit 14 is 0, SIS900PHY will auto-detect proper equalizer value.
+ *	When Link is ON and Bit 14 is 0, SIS900PHY will auto-dectect proper equalizer value.
  *	When the equalizer is stable, this value is not a fixed value. It will be within
  *	a small range(eg. 7~9). Then we get a minimum and a maximum value(eg. min=7, max=9)
  *	0 <= max <= 4  --> set equalizer to max
@@ -1276,6 +1262,7 @@ static void sis630_set_eq(struct net_device *net_dev, u8 revision)
 			mdio_write(net_dev, sis_priv->cur_phy, MII_RESV,
 						(reg14h | 0x2000) & 0xBFFF);
 	}
+	return;
 }
 
 /**
@@ -1510,7 +1497,7 @@ static void sis900_read_mode(struct net_device *net_dev, int *speed, int *duplex
 	}
 
 	if(netif_msg_link(sis_priv))
-		printk(KERN_INFO "%s: Media Link On %s %s-duplex\n",
+		printk(KERN_INFO "%s: Media Link On %s %s-duplex \n",
 	       				net_dev->name,
 	       				*speed == HW_SPEED_100_MBPS ?
 	       					"100mbps" : "10mbps",
@@ -1534,7 +1521,7 @@ static void sis900_tx_timeout(struct net_device *net_dev)
 	int i;
 
 	if(netif_msg_tx_err(sis_priv))
-		printk(KERN_INFO "%s: Transmit timeout, status %8.8x %8.8x\n",
+		printk(KERN_INFO "%s: Transmit timeout, status %8.8x %8.8x \n",
 	       		net_dev->name, inl(ioaddr + cr), inl(ioaddr + isr));
 
 	/* Disable interrupts by clearing the interrupt mask. */
@@ -1564,13 +1551,14 @@ static void sis900_tx_timeout(struct net_device *net_dev)
 
 	spin_unlock_irqrestore(&sis_priv->lock, flags);
 
-	net_dev->trans_start = jiffies; /* prevent tx timeout */
+	net_dev->trans_start = jiffies;
 
 	/* load Transmit Descriptor Register */
 	outl(sis_priv->tx_ring_dma, ioaddr + txdp);
 
 	/* Enable all known interrupts by setting the interrupt mask. */
 	outl((RxSOVR|RxORN|RxERR|RxOK|TxURN|TxERR|TxIDLE), ioaddr + imr);
+	return;
 }
 
 /**
@@ -1583,7 +1571,7 @@ static void sis900_tx_timeout(struct net_device *net_dev)
  *	tell upper layer if the buffer is full
  */
 
-static netdev_tx_t
+static int
 sis900_start_xmit(struct sk_buff *skb, struct net_device *net_dev)
 {
 	struct sis900_private *sis_priv = netdev_priv(net_dev);
@@ -1596,7 +1584,7 @@ sis900_start_xmit(struct sk_buff *skb, struct net_device *net_dev)
 	/* Don't transmit data before the complete of auto-negotiation */
 	if(!sis_priv->autong_complete){
 		netif_stop_queue(net_dev);
-		return NETDEV_TX_BUSY;
+		return 1;
 	}
 
 	spin_lock_irqsave(&sis_priv->lock, flags);
@@ -1633,12 +1621,14 @@ sis900_start_xmit(struct sk_buff *skb, struct net_device *net_dev)
 
 	spin_unlock_irqrestore(&sis_priv->lock, flags);
 
+	net_dev->trans_start = jiffies;
+
 	if (netif_msg_tx_queued(sis_priv))
 		printk(KERN_DEBUG "%s: Queued Tx packet at %p size %d "
 		       "to slot %d.\n",
 		       net_dev->name, skb->data, (int)skb->len, entry);
 
-	return NETDEV_TX_OK;
+	return 0;
 }
 
 /**
@@ -1738,7 +1728,7 @@ static int sis900_rx(struct net_device *net_dev)
 		rx_size = data_size - CRC_SIZE;
 
 #if defined(CONFIG_VLAN_8021Q) || defined(CONFIG_VLAN_8021Q_MODULE)
-		/* ``TOOLONG'' flag means jumbo packet received. */
+		/* ``TOOLONG'' flag means jumbo packet recived. */
 		if ((rx_status & TOOLONG) && data_size <= MAX_FRAME_SIZE)
 			rx_status &= (~ ((unsigned int)TOOLONG));
 #endif
@@ -1768,7 +1758,7 @@ static int sis900_rx(struct net_device *net_dev)
 				sis_priv->rx_ring[entry].bufptr, RX_BUF_SIZE,
 				PCI_DMA_FROMDEVICE);
 
-			/* refill the Rx buffer, what if there is not enough
+			/* refill the Rx buffer, what if there is not enought
 			 * memory for new socket buffer ?? */
 			if ((skb = dev_alloc_skb(RX_BUF_SIZE)) == NULL) {
 				/*
@@ -1783,7 +1773,7 @@ static int sis900_rx(struct net_device *net_dev)
 			}
 
 			/* This situation should never happen, but due to
-			   some unknown bugs, it is possible that
+			   some unknow bugs, it is possible that
 			   we are working on NULL sk_buff :-( */
 			if (sis_priv->rx_skbuff[entry] == NULL) {
 				if (netif_msg_rx_err(sis_priv))
@@ -1792,7 +1782,6 @@ static int sis900_rx(struct net_device *net_dev)
 					      "cur_rx:%4.4d, dirty_rx:%4.4d\n",
 					      net_dev->name, sis_priv->cur_rx,
 					      sis_priv->dirty_rx);
-				dev_kfree_skb(skb);
 				break;
 			}
 
@@ -2138,6 +2127,8 @@ static int mii_ioctl(struct net_device *net_dev, struct ifreq *rq, int cmd)
 		return 0;
 
 	case SIOCSMIIREG:		/* Write MII PHY register. */
+		if (!capable(CAP_NET_ADMIN))
+			return -EPERM;
 		mdio_write(net_dev, data->phy_id & 0x1f, data->reg_num & 0x1f, data->val_in);
 		return 0;
 	default:
@@ -2263,9 +2254,9 @@ static inline u16 sis900_mcast_bitnr(u8 *addr, u8 revision)
 
 	/* leave 8 or 7 most siginifant bits */
 	if ((revision >= SIS635A_900_REV) || (revision == SIS900B_900_REV))
-		return (int)(crc >> 24);
+		return ((int)(crc >> 24));
 	else
-		return (int)(crc >> 25);
+		return ((int)(crc >> 25));
 }
 
 /**
@@ -2297,7 +2288,7 @@ static void set_rx_mode(struct net_device *net_dev)
 		rx_mode = RFPromiscuous;
 		for (i = 0; i < table_entries; i++)
 			mc_filter[i] = 0xffff;
-	} else if ((netdev_mc_count(net_dev) > multicast_filter_limit) ||
+	} else if ((net_dev->mc_count > multicast_filter_limit) ||
 		   (net_dev->flags & IFF_ALLMULTI)) {
 		/* too many multicast addresses or accept all multicast packet */
 		rx_mode = RFAAB | RFAAM;
@@ -2307,14 +2298,13 @@ static void set_rx_mode(struct net_device *net_dev)
 		/* Accept Broadcast packet, destination address matchs our
 		 * MAC address, use Receive Filter to reject unwanted MCAST
 		 * packets */
-		struct netdev_hw_addr *ha;
+		struct dev_mc_list *mclist;
 		rx_mode = RFAAB;
-
-		netdev_for_each_mc_addr(ha, net_dev) {
-			unsigned int bit_nr;
-
-			bit_nr = sis900_mcast_bitnr(ha->addr,
-						    sis_priv->chipset_rev);
+		for (i = 0, mclist = net_dev->mc_list;
+			mclist && i < net_dev->mc_count;
+			i++, mclist = mclist->next) {
+			unsigned int bit_nr =
+				sis900_mcast_bitnr(mclist->dmi_addr, sis_priv->chipset_rev);
 			mc_filter[bit_nr >> 4] |= (1 << (bit_nr & 0xf));
 		}
 	}
@@ -2341,6 +2331,8 @@ static void set_rx_mode(struct net_device *net_dev)
 		/* restore cr */
 		outl(cr_saved, ioaddr + cr);
 	}
+
+	return;
 }
 
 /**

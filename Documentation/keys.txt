@@ -26,7 +26,7 @@ This document has the following sections:
 	- Notes on accessing payload contents
 	- Defining a key type
 	- Request-key callback service
-	- Garbage collection
+	- Key access filesystem
 
 
 ============
@@ -112,9 +112,6 @@ Each key has a number of attributes:
 	 found or operated upon (apart from by unlinking it).
 
      (*) Dead. The key's type was unregistered, and so the key is now useless.
-
-Keys in the last three states are subject to garbage collection.  See the
-section on "Garbage collection".
 
 
 ====================
@@ -637,9 +634,6 @@ The keyctl syscall functions are:
 	long keyctl(KEYCTL_INSTANTIATE, key_serial_t key,
 		    const void *payload, size_t plen,
 		    key_serial_t keyring);
-	long keyctl(KEYCTL_INSTANTIATE_IOV, key_serial_t key,
-		    const struct iovec *payload_iov, unsigned ioc,
-		    key_serial_t keyring);
 
      If the kernel calls back to userspace to complete the instantiation of a
      key, userspace should use this call to supply data for the key before the
@@ -655,16 +649,11 @@ The keyctl syscall functions are:
 
      The payload and plen arguments describe the payload data as for add_key().
 
-     The payload_iov and ioc arguments describe the payload data in an iovec
-     array instead of a single buffer.
-
 
  (*) Negatively instantiate a partially constructed key.
 
 	long keyctl(KEYCTL_NEGATE, key_serial_t key,
 		    unsigned timeout, key_serial_t keyring);
-	long keyctl(KEYCTL_REJECT, key_serial_t key,
-		    unsigned timeout, unsigned error, key_serial_t keyring);
 
      If the kernel calls back to userspace to complete the instantiation of a
      key, userspace should use this call mark the key as negative before the
@@ -676,10 +665,6 @@ The keyctl syscall functions are:
      If a keyring is specified (non-zero), the key will also be linked into
      that keyring, however all the constraints applying in KEYCTL_LINK apply in
      this case too.
-
-     If the key is rejected, future searches for it will return the specified
-     error code until the rejected key expires.  Negating the key is the same
-     as rejecting the key with ENOKEY as the error code.
 
 
  (*) Set the default request-key destination keyring.
@@ -767,26 +752,6 @@ The keyctl syscall functions are:
 
      A process must have view permission on the key for this function to be
      successful.
-
-
- (*) Install the calling process's session keyring on its parent.
-
-	long keyctl(KEYCTL_SESSION_TO_PARENT);
-
-     This functions attempts to install the calling process's session keyring
-     on to the calling process's parent, replacing the parent's current session
-     keyring.
-
-     The calling process must have the same ownership as its parent, the
-     keyring must have the same ownership as the calling process, the calling
-     process must have LINK permission on the keyring and the active LSM module
-     mustn't deny permission, otherwise error EPERM will be returned.
-
-     Error ENOMEM will be returned if there was insufficient memory to complete
-     the operation, otherwise 0 will be returned to indicate success.
-
-     The keyring will be replaced next time the parent process leaves the
-     kernel and resumes executing userspace.
 
 
 ===============
@@ -1074,13 +1039,6 @@ The structure has a number of fields, some of which are mandatory:
      viable.
 
 
- (*) int (*vet_description)(const char *description);
-
-     This optional method is called to vet a key description.  If the key type
-     doesn't approve of the key description, it may return an error, otherwise
-     it should return 0.
-
-
  (*) int (*instantiate)(struct key *key, const void *data, size_t datalen);
 
      This method is called to attach a payload to a key during construction.
@@ -1250,11 +1208,10 @@ hand the request off to (perhaps a path held in placed in another key by, for
 example, the KDE desktop manager).
 
 The program (or whatever it calls) should finish construction of the key by
-calling KEYCTL_INSTANTIATE or KEYCTL_INSTANTIATE_IOV, which also permits it to
-cache the key in one of the keyrings (probably the session ring) before
-returning.  Alternatively, the key can be marked as negative with KEYCTL_NEGATE
-or KEYCTL_REJECT; this also permits the key to be cached in one of the
-keyrings.
+calling KEYCTL_INSTANTIATE, which also permits it to cache the key in one of
+the keyrings (probably the session ring) before returning. Alternatively, the
+key can be marked as negative with KEYCTL_NEGATE; this also permits the key to
+be cached in one of the keyrings.
 
 If it returns with the key remaining in the unconstructed state, the key will
 be marked as being negative, it will be added to the session keyring, and an
@@ -1274,17 +1231,3 @@ by executing:
 
 In this case, the program isn't required to actually attach the key to a ring;
 the rings are provided for reference.
-
-
-==================
-GARBAGE COLLECTION
-==================
-
-Dead keys (for which the type has been removed) will be automatically unlinked
-from those keyrings that point to them and deleted as soon as possible by a
-background garbage collector.
-
-Similarly, revoked and expired keys will be garbage collected, but only after a
-certain amount of time has passed.  This time is set as a number of seconds in:
-
-	/proc/sys/kernel/keys/gc_delay

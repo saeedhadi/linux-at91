@@ -20,8 +20,7 @@
 #include <mach/at91rm9200_mc.h>
 #elif defined(CONFIG_ARCH_AT91CAP9)
 #include <mach/at91cap9_ddrsdr.h>
-#elif	defined(CONFIG_ARCH_AT91SAM9G45) || defined(CONFIG_ARCH_AT91SAM9X5) || \
-	defined(CONFIG_ARCH_AT91SAM9N12)
+#elif defined(CONFIG_ARCH_AT91SAM9G45)
 #include <mach/at91sam9_ddrsdr.h>
 #else
 #include <mach/at91sam9_sdramc.h>
@@ -125,7 +124,6 @@ ENTRY(at91_slow_clock)
 	ldr	r5, .at91_va_base_ramc1
 
 	/* Drain write buffer */
-	mov	r0, #0
 	mcr	p15, 0, r0, c7, c10, 4
 
 #ifdef CONFIG_ARCH_AT91RM9200
@@ -133,9 +131,7 @@ ENTRY(at91_slow_clock)
 	mov	r3, #1
 	str	r3, [r2, #AT91_SDRAMC_SRR]
 #elif defined(CONFIG_ARCH_AT91CAP9) \
-	|| defined(CONFIG_ARCH_AT91SAM9G45) \
-	|| defined(CONFIG_ARCH_AT91SAM9X5) \
-	|| defined(CONFIG_ARCH_AT91SAM9N12)
+	|| defined(CONFIG_ARCH_AT91SAM9G45)
 
 	/* prepare for DDRAM self-refresh mode */
 	ldr	r3, [r2, #AT91_DDRSDRC_LPR]
@@ -268,9 +264,7 @@ ENTRY(at91_slow_clock)
 #ifdef CONFIG_ARCH_AT91RM9200
 	/* Do nothing - self-refresh is automatically disabled. */
 #elif defined(CONFIG_ARCH_AT91CAP9) \
-	|| defined(CONFIG_ARCH_AT91SAM9G45) \
-	|| defined(CONFIG_ARCH_AT91SAM9X5) \
-	|| defined(CONFIG_ARCH_AT91SAM9N12)
+	|| defined(CONFIG_ARCH_AT91SAM9G45)
 	/* Restore LPR on AT91 with DDRAM */
 	ldr	r3, .saved_sam9_lpr
 	str	r3, [r2, #AT91_DDRSDRC_LPR]
@@ -312,9 +306,7 @@ ENTRY(at91_slow_clock)
 .at91_va_base_sdramc:
 	.word AT91_VA_BASE_SYS
 #elif defined(CONFIG_ARCH_AT91CAP9) \
-	|| defined(CONFIG_ARCH_AT91SAM9G45) \
-	|| defined(CONFIG_ARCH_AT91SAM9X5) \
-	|| defined(CONFIG_ARCH_AT91SAM9N12)
+	|| defined(CONFIG_ARCH_AT91SAM9G45)
 .at91_va_base_sdramc:
 	.word AT91_VA_BASE_SYS + AT91_DDRSDRC0
 #else

@@ -1,7 +1,32 @@
 /*
- * Copyright 2007-2009 Analog Devices Inc.
+ * file:	include/asm-blackfin/mach-bf548/irq.h
+ * based on:	include/asm-blackfin/mach-bf537/irq.h
+ * author:	Roy Huang (roy.huang@analog.com)
  *
- * Licensed under the GPL-2 or later.
+ * created:
+ * description:
+ *	system mmr register map
+ * rev:
+ *
+ * modified:
+ *
+ *
+ * bugs:         enter bugs at http://blackfin.uclinux.org/
+ *
+ * this program is free software; you can redistribute it and/or modify
+ * it under the terms of the gnu general public license as published by
+ * the free software foundation; either version 2, or (at your option)
+ * any later version.
+ *
+ * this program is distributed in the hope that it will be useful,
+ * but without any warranty; without even the implied warranty of
+ * merchantability or fitness for a particular purpose.  see the
+ * gnu general public license for more details.
+ *
+ * you should have received a copy of the gnu general public license
+ * along with this program; see the file copying.
+ * if not, write to the free software foundation,
+ * 59 temple place - suite 330, boston, ma 02111-1307, usa.
  */
 
 #ifndef _BF548_IRQ_H_
@@ -74,9 +99,13 @@ Events         (highest priority)  EMU         0
 #define IRQ_UART2_ERROR		BFIN_IRQ(31)	/* UART2 Status (Error) Interrupt */
 #define IRQ_CAN0_ERROR		BFIN_IRQ(32)	/* CAN0 Status (Error) Interrupt */
 #define IRQ_SPORT2_RX		BFIN_IRQ(33)	/* SPORT2 RX (DMA18) Interrupt */
+#define IRQ_UART2_RX		BFIN_IRQ(33)	/* UART2 RX (DMA18) Interrupt */
 #define IRQ_SPORT2_TX		BFIN_IRQ(34)	/* SPORT2 TX (DMA19) Interrupt */
+#define IRQ_UART2_TX		BFIN_IRQ(34)	/* UART2 TX (DMA19) Interrupt */
 #define IRQ_SPORT3_RX		BFIN_IRQ(35)	/* SPORT3 RX (DMA20) Interrupt */
+#define IRQ_UART3_RX		BFIN_IRQ(35)	/* UART3 RX (DMA20) Interrupt */
 #define IRQ_SPORT3_TX		BFIN_IRQ(36)	/* SPORT3 TX (DMA21) Interrupt */
+#define IRQ_UART3_TX		BFIN_IRQ(36)	/* UART3 TX (DMA21) Interrupt */
 #define IRQ_EPPI1		BFIN_IRQ(37)	/* EPP1 (DMA13) Interrupt */
 #define IRQ_EPPI2		BFIN_IRQ(38)	/* EPP2 (DMA14) Interrupt */
 #define IRQ_SPI1		BFIN_IRQ(39)	/* SPI1 (DMA5) Interrupt */
@@ -313,8 +342,7 @@ Events         (highest priority)  EMU         0
 
 #define GPIO_IRQ_BASE	IRQ_PA0
 
-#define NR_MACH_IRQS	(IRQ_PJ15 + 1)
-#define NR_IRQS		(NR_MACH_IRQS + NR_SPARE_IRQS)
+#define NR_IRQS     (IRQ_PJ15+1)
 
 /* For compatibility reasons with existing code */
 
@@ -469,27 +497,5 @@ Events         (highest priority)  EMU         0
 #define IRQ_TIMER7_POS		20
 #define IRQ_PINT2_POS		24
 #define IRQ_PINT3_POS		28
-
-#ifndef __ASSEMBLY__
-#include <linux/types.h>
-
-/*
- * bfin pint registers layout
- */
-struct bfin_pint_regs {
-	u32 mask_set;
-	u32 mask_clear;
-	u32 irq;
-	u32 assign;
-	u32 edge_set;
-	u32 edge_clear;
-	u32 invert_set;
-	u32 invert_clear;
-	u32 pinstate;
-	u32 latch;
-	u32 __pad0[2];
-};
-
-#endif
 
 #endif /* _BF548_IRQ_H_ */

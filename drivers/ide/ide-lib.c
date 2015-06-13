@@ -96,7 +96,7 @@ static void ide_dump_ata_error(ide_drive_t *drive, u8 err)
 
 		if (rq)
 			printk(KERN_CONT ", sector=%llu",
-			       (unsigned long long)blk_rq_pos(rq));
+			       (unsigned long long)rq->sector);
 	}
 	printk(KERN_CONT "\n");
 }

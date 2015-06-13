@@ -1,8 +1,23 @@
 /*
- * Copyright 2007-2008 Analog Devices Inc.
- *              Philippe Gerum <rpm@xenomai.org>
+ * File:         arch/blackfin/mach-bf561/atomic.S
+ * Author:       Philippe Gerum <rpm@xenomai.org>
  *
- * Licensed under the GPL-2 or later.
+ *               Copyright 2007 Analog Devices Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see the file COPYING, or write
+ * to the Free Software Foundation, Inc.,
+ * 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
 #include <linux/linkage.h>
@@ -19,16 +34,6 @@
 	\reg\().h = _corelock;
 .endm
 
-.macro safe_testset addr:req, scratch:req
-#if ANOMALY_05000477
-	cli \scratch;
-	testset (\addr);
-	sti \scratch;
-#else
-	testset (\addr);
-#endif
-.endm
-
 /*
  * r0 = address of atomic data to flush and invalidate (32bit).
  *
@@ -43,13 +48,12 @@ ENTRY(_get_core_lock)
 	cli r0;
 	coreslot_loadaddr p0;
 .Lretry_corelock:
-	safe_testset p0, r2;
+	testset (p0);
 	if cc jump .Ldone_corelock;
 	SSYNC(r2);
 	jump .Lretry_corelock
 .Ldone_corelock:
 	p0 = r1;
-	/* flush core internal write buffer before invalidate dcache */
 	CSYNC(r2);
 	flushinv[p0];
 	SSYNC(r2);
@@ -67,7 +71,7 @@ ENTRY(_get_core_lock_noflush)
 	cli r0;
 	coreslot_loadaddr p0;
 .Lretry_corelock_noflush:
-	safe_testset p0, r2;
+	testset (p0);
 	if cc jump .Ldone_corelock_noflush;
 	SSYNC(r2);
 	jump .Lretry_corelock_noflush
@@ -686,8 +690,6 @@ ENTRY(___raw_atomic_test_asm)
 	r1 = -L1_CACHE_BYTES;
 	r1 = r0 & r1;
 	p0 = r1;
-	/* flush core internal write buffer before invalidate dcache */
-	CSYNC(r2);
 	flushinv[p0];
 	SSYNC(r2);
 	r0 = [p1];
@@ -910,8 +912,6 @@ ENTRY(___raw_uncached_fetch_asm)
 	r1 = -L1_CACHE_BYTES;
 	r1 = r0 & r1;
 	p0 = r1;
-	/* flush core internal write buffer before invalidate dcache */
-	CSYNC(r2);
 	flushinv[p0];
 	SSYNC(r2);
 	r0 = [p1];

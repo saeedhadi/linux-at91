@@ -6,7 +6,8 @@
 #include <linux/smp.h>
 #include <linux/init.h>
 #include <linux/pfn.h>
-#include <linux/memblock.h>
+
+#include <asm/e820.h>
 
 static u64 patterns[] __initdata = {
 	0,
@@ -34,27 +35,28 @@ static void __init reserve_bad_mem(u64 pattern, u64 start_bad, u64 end_bad)
 	       (unsigned long long) pattern,
 	       (unsigned long long) start_bad,
 	       (unsigned long long) end_bad);
-	memblock_x86_reserve_range(start_bad, end_bad, "BAD RAM");
+	reserve_early(start_bad, end_bad, "BAD RAM");
 }
 
 static void __init memtest(u64 pattern, u64 start_phys, u64 size)
 {
-	u64 *p, *start, *end;
+	u64 i, count;
+	u64 *start;
 	u64 start_bad, last_bad;
 	u64 start_phys_aligned;
-	const size_t incr = sizeof(pattern);
+	size_t incr;
 
+	incr = sizeof(pattern);
 	start_phys_aligned = ALIGN(start_phys, incr);
+	count = (size - (start_phys_aligned - start_phys))/incr;
 	start = __va(start_phys_aligned);
-	end = start + (size - (start_phys_aligned - start_phys)) / incr;
 	start_bad = 0;
 	last_bad = 0;
 
-	for (p = start; p < end; p++)
-		*p = pattern;
-
-	for (p = start; p < end; p++, start_phys_aligned += incr) {
-		if (*p == pattern)
+	for (i = 0; i < count; i++)
+		start[i] = pattern;
+	for (i = 0; i < count; i++, start++, start_phys_aligned += incr) {
+		if (*start == pattern)
 			continue;
 		if (start_phys_aligned == last_bad + incr) {
 			last_bad += incr;
@@ -73,7 +75,7 @@ static void __init do_one_pass(u64 pattern, u64 start, u64 end)
 	u64 size = 0;
 
 	while (start < end) {
-		start = memblock_x86_find_in_range_size(start, &size, 1);
+		start = find_e820_area_size(start, &size, 1);
 
 		/* done ? */
 		if (start >= end)

@@ -26,7 +26,6 @@
 #include <linux/delay.h>
 #include <linux/string.h>
 #include <linux/firmware.h>
-#include <linux/slab.h>
 #include <asm/div64.h>
 
 #include "dvb_frontend.h"
@@ -82,7 +81,7 @@ static struct {
 #include "drx397xD_fw.h"
 };
 
-/* use only with writer lock acquired */
+/* use only with writer lock aquired */
 static void _drx_release_fw(struct drx397xD_state *s, enum fw_ix ix)
 {
 	memset(&fw[ix].data[0], 0, sizeof(fw[0].data));
@@ -124,10 +123,10 @@ static int drx_load_fw(struct drx397xD_state *s, enum fw_ix ix)
 	}
 	memset(&fw[ix].data[0], 0, sizeof(fw[0].data));
 
-	rc = request_firmware(&fw[ix].file, fw[ix].name, s->i2c->dev.parent);
-	if (rc != 0) {
+	if (request_firmware(&fw[ix].file, fw[ix].name, &s->i2c->dev) != 0) {
 		printk(KERN_ERR "%s: Firmware \"%s\" not available\n",
 		       mod_name, fw[ix].name);
+		rc = -ENOENT;
 		goto exit_err;
 	}
 
@@ -232,7 +231,7 @@ static int write_fw(struct drx397xD_state *s, enum blob_ix ix)
 exit_rc:
 	read_unlock(&fw[s->chip_rev].lock);
 
-	return rc;
+	return 0;
 }
 
 /* Function is not endian safe, use the RD16 wrapper below */
@@ -1097,7 +1096,7 @@ static int drx397x_init(struct dvb_frontend *fe)
 	s->config.ifagc.w0A = 0x3ff;
 	s->config.ifagc.w0C = 0x388;
 
-	/* for signal strength calculations */
+	/* for signal strenght calculations */
 	s->config.ss76 = 820;
 	s->config.ss78 = 2200;
 	s->config.ss7A = 150;

@@ -11,7 +11,6 @@
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/module.h>
-#include <linux/mtd/nand.h>
 #include <linux/platform_device.h>
 #include <linux/spi/spi.h>
 #include <linux/fb.h>
@@ -19,7 +18,7 @@
 #include <linux/input.h>
 #include <linux/gpio_keys.h>
 
-#include <video/atmel_lcdfb.h>
+#include <video/atmel_lcdc.h>
 
 #include <asm/setup.h>
 #include <asm/mach-types.h>
@@ -32,9 +31,8 @@
 #include <mach/hardware.h>
 #include <mach/board.h>
 #include <mach/gpio.h>
-#include <mach/atmel_lcdc.h>
-#include <mach/at91sam9_smc.h>
 #include <mach/at91_shdwc.h>
+#include <mach/at91sam9_smc.h>
 
 #include "sam9_smc.h"
 #include "generic.h"
@@ -45,7 +43,7 @@ static void __init ek_map_io(void)
 	/* Initialize processor: 12.000 MHz crystal */
 	at91sam9rl_initialize(12000000);
 
-	/* DBGU on ttyS0. (Rx & Tx only) */
+	/* DGBU on ttyS0. (Rx & Tx only) */
 	at91_register_uart(0, 0, 0);
 
 	/* USART0 on ttyS1. (Rx, Tx, CTS, RTS) */
@@ -108,7 +106,6 @@ static struct atmel_nand_data __initdata ek_nand_data = {
 //	.det_pin	= ... not connected
 	.rdy_pin	= AT91_PIN_PD17,
 	.enable_pin	= AT91_PIN_PB6,
-	.ecc_mode	= NAND_ECC_SOFT,
 	.partition_info	= nand_partitions,
 };
 
@@ -328,10 +325,15 @@ static void __init ek_board_init(void)
 	at91_gpio_leds(ek_leds, ARRAY_SIZE(ek_leds));
 	/* Push Buttons */
 	ek_add_device_buttons();
+	/* shutdown controller, wakeup button (5 msec low) */
+	at91_sys_write(AT91_SHDW_MR, AT91_SHDW_CPTWK0_(10) | AT91_SHDW_WKMODE0_LOW
+				| AT91_SHDW_RTTWKEN);
 }
 
 MACHINE_START(AT91SAM9RLEK, "Atmel AT91SAM9RL-EK")
 	/* Maintainer: Atmel */
+	.phys_io	= AT91_BASE_SYS,
+	.io_pg_offst	= (AT91_VA_BASE_SYS >> 18) & 0xfffc,
 	.boot_params	= AT91_SDRAM_BASE + 0x100,
 	.timer		= &at91sam926x_timer,
 	.map_io		= ek_map_io,

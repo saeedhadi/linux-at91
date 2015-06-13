@@ -15,7 +15,6 @@
  *
  */
 
-#include <linux/gfp.h>
 #include <linux/module.h>
 #include <linux/mISDNhw.h>
 
@@ -110,19 +109,18 @@ mISDN_freedchannel(struct dchannel *ch)
 	}
 	skb_queue_purge(&ch->squeue);
 	skb_queue_purge(&ch->rqueue);
-	flush_work_sync(&ch->workq);
+	flush_scheduled_work();
 	return 0;
 }
 EXPORT_SYMBOL(mISDN_freedchannel);
 
-void
-mISDN_clear_bchannel(struct bchannel *ch)
+int
+mISDN_freebchannel(struct bchannel *ch)
 {
 	if (ch->tx_skb) {
 		dev_kfree_skb(ch->tx_skb);
 		ch->tx_skb = NULL;
 	}
-	ch->tx_idx = 0;
 	if (ch->rx_skb) {
 		dev_kfree_skb(ch->rx_skb);
 		ch->rx_skb = NULL;
@@ -131,19 +129,9 @@ mISDN_clear_bchannel(struct bchannel *ch)
 		dev_kfree_skb(ch->next_skb);
 		ch->next_skb = NULL;
 	}
-	test_and_clear_bit(FLG_TX_BUSY, &ch->Flags);
-	test_and_clear_bit(FLG_TX_NEXT, &ch->Flags);
-	test_and_clear_bit(FLG_ACTIVE, &ch->Flags);
-}
-EXPORT_SYMBOL(mISDN_clear_bchannel);
-
-int
-mISDN_freebchannel(struct bchannel *ch)
-{
-	mISDN_clear_bchannel(ch);
 	skb_queue_purge(&ch->rqueue);
 	ch->rcount = 0;
-	flush_work_sync(&ch->workq);
+	flush_scheduled_work();
 	return 0;
 }
 EXPORT_SYMBOL(mISDN_freebchannel);
@@ -197,16 +185,16 @@ recv_Echannel(struct dchannel *ech, struct dchannel *dch)
 EXPORT_SYMBOL(recv_Echannel);
 
 void
-recv_Bchannel(struct bchannel *bch, unsigned int id)
+recv_Bchannel(struct bchannel *bch)
 {
 	struct mISDNhead *hh;
 
 	hh = mISDN_HEAD_P(bch->rx_skb);
 	hh->prim = PH_DATA_IND;
-	hh->id = id;
+	hh->id = MISDN_ID_ANY;
 	if (bch->rcount >= 64) {
 		printk(KERN_WARNING "B-channel %p receive queue overflow, "
-			"flushing!\n", bch);
+			"fushing!\n", bch);
 		skb_queue_purge(&bch->rqueue);
 		bch->rcount = 0;
 		return;
@@ -231,7 +219,7 @@ recv_Bchannel_skb(struct bchannel *bch, struct sk_buff *skb)
 {
 	if (bch->rcount >= 64) {
 		printk(KERN_WARNING "B-channel %p receive queue overflow, "
-			"flushing!\n", bch);
+			"fushing!\n", bch);
 		skb_queue_purge(&bch->rqueue);
 		bch->rcount = 0;
 	}
@@ -279,7 +267,7 @@ confirm_Bsend(struct bchannel *bch)
 
 	if (bch->rcount >= 64) {
 		printk(KERN_WARNING "B-channel %p receive queue overflow, "
-			"flushing!\n", bch);
+			"fushing!\n", bch);
 		skb_queue_purge(&bch->rqueue);
 		bch->rcount = 0;
 	}

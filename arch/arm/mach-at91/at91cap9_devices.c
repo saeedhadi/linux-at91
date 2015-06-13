@@ -19,12 +19,11 @@
 #include <linux/platform_device.h>
 #include <linux/i2c-gpio.h>
 
-#include <video/atmel_lcdfb.h>
+#include <video/atmel_lcdc.h>
 
 #include <mach/board.h>
 #include <mach/cpu.h>
 #include <mach/gpio.h>
-#include <mach/atmel_lcdc.h>
 #include <mach/at91cap9.h>
 #include <mach/at91cap9_matrix.h>
 #include <mach/at91sam9_smc.h>
@@ -73,7 +72,7 @@ void __init at91_add_device_usbh(struct at91_usbh_data *data)
 		return;
 
 	if (cpu_is_at91cap9_revB())
-		irq_set_irq_type(AT91CAP9_ID_UHP, IRQ_TYPE_LEVEL_HIGH);
+		set_irq_type(AT91CAP9_ID_UHP, IRQ_TYPE_LEVEL_HIGH);
 
 	/* Enable VBus control for UHP ports */
 	for (i = 0; i < data->ports; i++) {
@@ -158,7 +157,7 @@ static struct platform_device at91_usba_udc_device = {
 void __init at91_add_device_usba(struct usba_platform_data *data)
 {
 	if (cpu_is_at91cap9_revB()) {
-		irq_set_irq_type(AT91CAP9_ID_UDPHS, IRQ_TYPE_LEVEL_HIGH);
+		set_irq_type(AT91CAP9_ID_UDPHS, IRQ_TYPE_LEVEL_HIGH);
 		at91_sys_write(AT91_MATRIX_UDPHS, AT91_MATRIX_SELECT_UDPHS |
 						  AT91_MATRIX_UDPHS_BYPASS_LOCK);
 	}
@@ -772,9 +771,9 @@ void __init at91_add_device_pwm(u32 mask) {}
  *  AC97
  * -------------------------------------------------------------------- */
 
-#if defined(CONFIG_SND_ATMEL_AC97C) || defined(CONFIG_SND_ATMEL_AC97C_MODULE)
+#if defined(CONFIG_SND_AT91_AC97) || defined(CONFIG_SND_AT91_AC97_MODULE)
 static u64 ac97_dmamask = DMA_BIT_MASK(32);
-static struct ac97c_platform_data ac97_data;
+static struct atmel_ac97_data ac97_data;
 
 static struct resource ac97_resources[] = {
 	[0] = {
@@ -790,7 +789,7 @@ static struct resource ac97_resources[] = {
 };
 
 static struct platform_device at91cap9_ac97_device = {
-	.name		= "atmel_ac97c",
+	.name		= "ac97c",
 	.id		= 1,
 	.dev		= {
 				.dma_mask		= &ac97_dmamask,
@@ -801,7 +800,7 @@ static struct platform_device at91cap9_ac97_device = {
 	.num_resources	= ARRAY_SIZE(ac97_resources),
 };
 
-void __init at91_add_device_ac97(struct ac97c_platform_data *data)
+void __init at91_add_device_ac97(struct atmel_ac97_data *data)
 {
 	if (!data)
 		return;
@@ -819,7 +818,7 @@ void __init at91_add_device_ac97(struct ac97c_platform_data *data)
 	platform_device_register(&at91cap9_ac97_device);
 }
 #else
-void __init at91_add_device_ac97(struct ac97c_platform_data *data) {}
+void __init at91_add_device_ac97(struct atmel_ac97_data *data) {}
 #endif
 
 
@@ -862,7 +861,7 @@ void __init at91_add_device_lcdc(struct atmel_lcdfb_info *data)
 		return;
 
 	if (cpu_is_at91cap9_revB())
-		irq_set_irq_type(AT91CAP9_ID_LCDC, IRQ_TYPE_LEVEL_HIGH);
+		set_irq_type(AT91CAP9_ID_LCDC, IRQ_TYPE_LEVEL_HIGH);
 
 	at91_set_A_periph(AT91_PIN_PC1, 0);	/* LCDHSYNC */
 	at91_set_A_periph(AT91_PIN_PC2, 0);	/* LCDDOTCK */

@@ -30,6 +30,13 @@ typedef struct mddev_s mddev_t;
 typedef struct mdk_rdev_s mdk_rdev_t;
 
 /*
+ * options passed in raidrun:
+ */
+
+/* Currently this must fit in an 'int' */
+#define MAX_CHUNK_SIZE (1<<30)
+
+/*
  * MD's 'extended' device
  */
 struct mdk_rdev_s
@@ -40,12 +47,6 @@ struct mdk_rdev_s
 	mddev_t *mddev;			/* RAID array if running */
 	int last_events;		/* IO event timestamp */
 
-	/*
-	 * If meta_bdev is non-NULL, it means that a separate device is
-	 * being used to store the metadata (superblock/bitmap) which
-	 * would otherwise be contained on the same device as the data (bdev).
-	 */
-	struct block_device *meta_bdev;
 	struct block_device *bdev;	/* block device handle */
 
 	struct page	*sb_page;
@@ -73,17 +74,20 @@ struct mdk_rdev_s
 #define	Faulty		1		/* device is known to have a fault */
 #define	In_sync		2		/* device is in_sync with rest of array */
 #define	WriteMostly	4		/* Avoid reading if at all possible */
+#define	BarriersNotsupp	5		/* BIO_RW_BARRIER is not supported */
+#define	AllReserved	6		/* If whole device is reserved for
+					 * one array */
 #define	AutoDetected	7		/* added by auto-detect */
-#define Blocked		8		/* An error occurred on an externally
+#define Blocked		8		/* An error occured on an externally
 					 * managed array, don't allow writes
 					 * until it is cleared */
+#define StateChanged	9		/* Faulty or Blocked has changed during
+					 * interrupt, so it needs to be
+					 * notified by the thread */
 	wait_queue_head_t blocked_wait;
 
 	int desc_nr;			/* descriptor index in the superblock */
 	int raid_disk;			/* role of device in array */
-	int new_raid_disk;		/* role that the device will have in
-					 * the array after a level-change completes.
-					 */
 	int saved_raid_disk;		/* role that device used to have in the
 					 * array and could again if we did a partial
 					 * resync from the bitmap
@@ -100,9 +104,6 @@ struct mdk_rdev_s
 	atomic_t	read_errors;	/* number of consecutive read errors that
 					 * we have tried to ignore.
 					 */
-	struct timespec last_read_error;	/* monotonic time since our
-						 * last read error
-						 */
 	atomic_t	corrected_errors; /* number of corrected read errors,
 					   * for reporting to userspace and storing
 					   * in superblock.
@@ -123,17 +124,12 @@ struct mddev_s
 	unsigned long			flags;
 #define MD_CHANGE_DEVS	0	/* Some device status has changed */
 #define MD_CHANGE_CLEAN 1	/* transition to or from 'clean' */
-#define MD_CHANGE_PENDING 2	/* switch from 'clean' to 'active' in progress */
+#define MD_CHANGE_PENDING 2	/* superblock update in progress */
 
 	int				suspended;
 	atomic_t			active_io;
 	int				ro;
-	int				sysfs_active; /* set when sysfs deletes
-						       * are happening, so run/
-						       * takeover/stop are not safe
-						       */
-	int				ready; /* See when safe to pass 
-						* IO requests down */
+
 	struct gendisk			*gendisk;
 
 	struct kobject			kobj;
@@ -149,7 +145,7 @@ struct mddev_s
 	int 				external;	/* metadata is
 							 * managed externally */
 	char				metadata_type[17]; /* externally set*/
-	int				chunk_sectors;
+	int				chunk_size;
 	time_t				ctime, utime;
 	int				level, layout;
 	char				clevel[16];
@@ -161,12 +157,6 @@ struct mddev_s
 	int				external_size; /* size managed
 							* externally */
 	__u64				events;
-	/* If the last 'event' was simply a clean->dirty transition, and
-	 * we didn't write it to the spares, then it is safe and simple
-	 * to just decrement the event count on a dirty->clean transition.
-	 * So we record that possibility here.
-	 */
-	int				can_decrease_events;
 
 	char				uuid[16];
 
@@ -176,12 +166,8 @@ struct mddev_s
 	 * If reshape_position is MaxSector, then no reshape is happening (yet).
 	 */
 	sector_t			reshape_position;
-	int				delta_disks, new_level, new_layout;
-	int				new_chunk_sectors;
+	int				delta_disks, new_level, new_layout, new_chunk;
 
-	atomic_t			plug_cnt;	/* If device is expecting
-							 * more bios soon.
-							 */
 	struct mdk_thread_s		*thread;	/* management thread */
 	struct mdk_thread_s		*sync_thread;	/* doing resync or reconstruct */
 	sector_t			curr_resync;	/* last block scheduled */
@@ -221,7 +207,7 @@ struct mddev_s
 	 * INTR:     resync needs to be aborted for some reason
 	 * DONE:     thread is done and is waiting to be reaped
 	 * REQUEST:  user-space has requested a sync (used with SYNC)
-	 * CHECK:    user-space request for check-only, no repair
+	 * CHECK:    user-space request for for check-only, no repair
 	 * RESHAPE:  A reshape is happening
 	 *
 	 * If neither SYNC or RESHAPE are set, then it is a recovery.
@@ -243,24 +229,20 @@ struct mddev_s
 							    * so we don't loop trying */
 
 	int				in_sync;	/* know to not need resync */
-	/* 'open_mutex' avoids races between 'md_open' and 'do_md_stop', so
-	 * that we are never stopping an array while it is open.
-	 * 'reconfig_mutex' protects all other reconfiguration.
-	 * These locks are separate due to conflicting interactions
-	 * with bdev->bd_mutex.
-	 * Lock ordering is:
-	 *  reconfig_mutex -> bd_mutex : e.g. do_md_run -> revalidate_disk
-	 *  bd_mutex -> open_mutex:  e.g. __blkdev_get -> md_open
-	 */
-	struct mutex			open_mutex;
 	struct mutex			reconfig_mutex;
 	atomic_t			active;		/* general refcount */
 	atomic_t			openers;	/* number of active opens */
 
-	int				changed;	/* True if we might need to
-							 * reread partition info */
+	int				changed;	/* true if we might need to reread partition info */
 	int				degraded;	/* whether md should consider
 							 * adding a spare
+							 */
+	int				barriers_work;	/* initialised to true, cleared as soon
+							 * as a barrier request to slave
+							 * fails.  Only supported
+							 */
+	struct bio			*biolist; 	/* bios that need to be retried
+							 * because BIO_RW_BARRIER is not supported
 							 */
 
 	atomic_t			recovery_active; /* blocks scheduled, but not written */
@@ -290,46 +272,21 @@ struct mddev_s
 	atomic_t			writes_pending; 
 	struct request_queue		*queue;	/* for plugging ... */
 
+	atomic_t                        write_behind; /* outstanding async IO */
+	unsigned int                    max_write_behind; /* 0 = sync */
+
 	struct bitmap                   *bitmap; /* the bitmap for the device */
-	struct {
-		struct file		*file; /* the bitmap file */
-		loff_t			offset; /* offset from superblock of
-						 * start of bitmap. May be
-						 * negative, but not '0'
-						 * For external metadata, offset
-						 * from start of device. 
-						 */
-		loff_t			default_offset; /* this is the offset to use when
-							 * hot-adding a bitmap.  It should
-							 * eventually be settable by sysfs.
-							 */
-		/* When md is serving under dm, it might use a
-		 * dirty_log to store the bits.
-		 */
-		struct dm_dirty_log *log;
+	struct file			*bitmap_file; /* the bitmap file */
+	long				bitmap_offset; /* offset from superblock of
+							* start of bitmap. May be
+							* negative, but not '0'
+							*/
+	long				default_bitmap_offset; /* this is the offset to use when
+								* hot-adding a bitmap.  It should
+								* eventually be settable by sysfs.
+								*/
 
-		struct mutex		mutex;
-		unsigned long		chunksize;
-		unsigned long		daemon_sleep; /* how many jiffies between updates? */
-		unsigned long		max_write_behind; /* write-behind mode */
-		int			external;
-	} bitmap_info;
-
-	atomic_t 			max_corr_read_errors; /* max read retries */
 	struct list_head		all_mddevs;
-
-	struct attribute_group		*to_remove;
-
-	struct bio_set			*bio_set;
-
-	/* Generic flush handling.
-	 * The last to finish preflush schedules a worker to submit
-	 * the rest of the request (without the REQ_FLUSH flag).
-	 */
-	struct bio *flush_bio;
-	atomic_t flush_pending;
-	struct work_struct flush_work;
-	struct work_struct event_work;	/* used by dm to report failure event */
 };
 
 
@@ -351,7 +308,7 @@ struct mdk_personality
 	int level;
 	struct list_head list;
 	struct module *owner;
-	int (*make_request)(mddev_t *mddev, struct bio *bio);
+	int (*make_request)(struct request_queue *q, struct bio *bio);
 	int (*run)(mddev_t *mddev);
 	int (*stop)(mddev_t *mddev);
 	void (*status)(struct seq_file *seq, mddev_t *mddev);
@@ -368,6 +325,7 @@ struct mdk_personality
 	int (*check_reshape) (mddev_t *mddev);
 	int (*start_reshape) (mddev_t *mddev);
 	void (*finish_reshape) (mddev_t *mddev);
+	int (*reconfig) (mddev_t *mddev, int layout, int chunk_size);
 	/* quiesce moves between quiescence states
 	 * 0 - fully active
 	 * 1 - no new requests allowed
@@ -392,19 +350,7 @@ struct md_sysfs_entry {
 	ssize_t (*show)(mddev_t *, char *);
 	ssize_t (*store)(mddev_t *, const char *, size_t);
 };
-extern struct attribute_group md_bitmap_group;
 
-static inline struct sysfs_dirent *sysfs_get_dirent_safe(struct sysfs_dirent *sd, char *name)
-{
-	if (sd)
-		return sysfs_get_dirent(sd, NULL, name);
-	return sd;
-}
-static inline void sysfs_notify_dirent_safe(struct sysfs_dirent *sd)
-{
-	if (sd)
-		sysfs_notify_dirent(sd);
-}
 
 static inline char * mdname (mddev_t * mddev)
 {
@@ -481,35 +427,15 @@ extern void md_write_end(mddev_t *mddev);
 extern void md_done_sync(mddev_t *mddev, int blocks, int ok);
 extern void md_error(mddev_t *mddev, mdk_rdev_t *rdev);
 
-extern int mddev_congested(mddev_t *mddev, int bits);
-extern void md_flush_request(mddev_t *mddev, struct bio *bio);
 extern void md_super_write(mddev_t *mddev, mdk_rdev_t *rdev,
 			   sector_t sector, int size, struct page *page);
 extern void md_super_wait(mddev_t *mddev);
-extern int sync_page_io(mdk_rdev_t *rdev, sector_t sector, int size, 
-			struct page *page, int rw, bool metadata_op);
+extern int sync_page_io(struct block_device *bdev, sector_t sector, int size,
+			struct page *page, int rw);
 extern void md_do_sync(mddev_t *mddev);
 extern void md_new_event(mddev_t *mddev);
 extern int md_allow_write(mddev_t *mddev);
 extern void md_wait_for_blocked_rdev(mdk_rdev_t *rdev, mddev_t *mddev);
 extern void md_set_array_sectors(mddev_t *mddev, sector_t array_sectors);
-extern int md_check_no_bitmap(mddev_t *mddev);
-extern int md_integrity_register(mddev_t *mddev);
-extern void md_integrity_add_rdev(mdk_rdev_t *rdev, mddev_t *mddev);
-extern int strict_strtoul_scaled(const char *cp, unsigned long *res, int scale);
-extern void restore_bitmap_write_access(struct file *file);
 
-extern void mddev_init(mddev_t *mddev);
-extern int md_run(mddev_t *mddev);
-extern void md_stop(mddev_t *mddev);
-extern void md_stop_writes(mddev_t *mddev);
-extern void md_rdev_init(mdk_rdev_t *rdev);
-
-extern void mddev_suspend(mddev_t *mddev);
-extern void mddev_resume(mddev_t *mddev);
-extern struct bio *bio_clone_mddev(struct bio *bio, gfp_t gfp_mask,
-				   mddev_t *mddev);
-extern struct bio *bio_alloc_mddev(gfp_t gfp_mask, int nr_iovecs,
-				   mddev_t *mddev);
-extern int mddev_check_plugged(mddev_t *mddev);
 #endif /* _MD_MD_H */

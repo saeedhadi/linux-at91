@@ -18,7 +18,6 @@
 #include <linux/errno.h>
 #include <linux/slab.h>
 #include <linux/ctype.h>
-#include <linux/string.h>
 #include <linux/sysctl.h>
 #include <asm/uaccess.h>
 #include <linux/module.h>
@@ -63,6 +62,8 @@ typedef struct
 	long args[0];
 } debug_sprintf_entry_t;
 
+
+extern void tod_to_timeval(uint64_t todval, struct timespec *xtime);
 
 /* internal function prototyes */
 
@@ -174,7 +175,6 @@ static const struct file_operations debug_file_ops = {
 	.write   = debug_input,
 	.open    = debug_open,
 	.release = debug_close,
-	.llseek  = no_llseek,
 };
 
 static struct dentry *debug_debugfs_root_entry;
@@ -656,7 +656,6 @@ found:
 	p_info->act_entry_offset = 0;
 	file->private_data = p_info;
 	debug_info_get(debug_info);
-	nonseekable_open(inode, file);
 out:
 	mutex_unlock(&debug_mutex);
 	return rc;
@@ -884,11 +883,11 @@ static int debug_active=1;
  * if debug_active is already off
  */
 static int
-s390dbf_procactive(ctl_table *table, int write,
+s390dbf_procactive(ctl_table *table, int write, struct file *filp,
                      void __user *buffer, size_t *lenp, loff_t *ppos)
 {
 	if (!write || debug_stoppable || !debug_active)
-		return proc_dointvec(table, write, buffer, lenp, ppos);
+		return proc_dointvec(table, write, filp, buffer, lenp, ppos);
 	else
 		return 0;
 }
@@ -896,30 +895,35 @@ s390dbf_procactive(ctl_table *table, int write,
 
 static struct ctl_table s390dbf_table[] = {
 	{
+		.ctl_name       = CTL_S390DBF_STOPPABLE,
 		.procname       = "debug_stoppable",
 		.data		= &debug_stoppable,
 		.maxlen		= sizeof(int),
 		.mode           = S_IRUGO | S_IWUSR,
-		.proc_handler   = proc_dointvec,
+		.proc_handler   = &proc_dointvec,
+		.strategy	= &sysctl_intvec,
 	},
 	 {
+		.ctl_name       = CTL_S390DBF_ACTIVE,
 		.procname       = "debug_active",
 		.data		= &debug_active,
 		.maxlen		= sizeof(int),
 		.mode           = S_IRUGO | S_IWUSR,
-		.proc_handler   = s390dbf_procactive,
+		.proc_handler   = &s390dbf_procactive,
+		.strategy	= &sysctl_intvec,
 	},
-	{ }
+	{ .ctl_name = 0 }
 };
 
 static struct ctl_table s390dbf_dir_table[] = {
 	{
+		.ctl_name       = CTL_S390DBF,
 		.procname       = "s390dbf",
 		.maxlen         = 0,
 		.mode           = S_IRUGO | S_IXUGO,
 		.child          = s390dbf_table,
 	},
-	{ }
+	{ .ctl_name = 0 }
 };
 
 static struct ctl_table_header *s390dbf_sysctl_header;
@@ -1181,7 +1185,7 @@ debug_get_uint(char *buf)
 {
 	int rc;
 
-	buf = skip_spaces(buf);
+	for(; isspace(*buf); buf++);
 	rc = simple_strtoul(buf, &buf, 10);
 	if(*buf){
 		rc = -EINVAL;
@@ -1446,13 +1450,17 @@ debug_dflt_header_fn(debug_info_t * id, struct debug_view *view,
 			 int area, debug_entry_t * entry, char *out_buf)
 {
 	struct timespec time_spec;
+	unsigned long long time;
 	char *except_str;
 	unsigned long caller;
 	int rc = 0;
 	unsigned int level;
 
 	level = entry->id.fields.level;
-	stck_to_timespec(entry->id.stck, &time_spec);
+	time = entry->id.stck;
+	/* adjust todclock to 1970 */
+	time -= 0x8126d60e46000000LL - (0x3c26700LL * 1000000 * 4096);
+	tod_to_timeval(time, &time_spec);
 
 	if (entry->id.fields.exception)
 		except_str = "*";

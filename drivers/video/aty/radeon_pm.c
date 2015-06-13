@@ -213,6 +213,7 @@ static void radeon_pm_disable_dynamic_mode(struct radeonfb_info *rinfo)
 			 PIXCLKS_CNTL__R300_PIXCLK_TRANS_ALWAYS_ONb	|
 			 PIXCLKS_CNTL__R300_PIXCLK_TVO_ALWAYS_ONb	|
 			 PIXCLKS_CNTL__R300_P2G2CLK_ALWAYS_ONb		|
+			 PIXCLKS_CNTL__R300_P2G2CLK_ALWAYS_ONb		|
 			 PIXCLKS_CNTL__R300_DISP_DAC_PIXCLK_DAC2_BLANK_OFF);
                 OUTPLL(pllPIXCLKS_CNTL, tmp);
 
@@ -394,7 +395,7 @@ static void radeon_pm_enable_dynamic_mode(struct radeonfb_info *rinfo)
 			PIXCLKS_CNTL__R300_PIXCLK_TRANS_ALWAYS_ONb      |
 			PIXCLKS_CNTL__R300_PIXCLK_TVO_ALWAYS_ONb        |
 			PIXCLKS_CNTL__R300_P2G2CLK_ALWAYS_ONb           |
-			PIXCLKS_CNTL__R300_P2G2CLK_DAC_ALWAYS_ONb);
+			PIXCLKS_CNTL__R300_P2G2CLK_ALWAYS_ONb);
 		OUTPLL(pllPIXCLKS_CNTL, tmp);
 
 		tmp = INPLL(pllMCLK_MISC);
@@ -2626,7 +2627,7 @@ int radeonfb_pci_suspend(struct pci_dev *pdev, pm_message_t mesg)
 		goto done;
 	}
 
-	console_lock();
+	acquire_console_sem();
 
 	fb_set_suspend(info, 1);
 
@@ -2690,7 +2691,7 @@ int radeonfb_pci_suspend(struct pci_dev *pdev, pm_message_t mesg)
 	if (rinfo->pm_mode & radeon_pm_d2)
 		radeon_set_suspend(rinfo, 1);
 
-	console_unlock();
+	release_console_sem();
 
  done:
 	pdev->dev.power.power_state = mesg;
@@ -2715,10 +2716,10 @@ int radeonfb_pci_resume(struct pci_dev *pdev)
 		return 0;
 
 	if (rinfo->no_schedule) {
-		if (!console_trylock())
+		if (try_acquire_console_sem())
 			return 0;
 	} else
-		console_lock();
+		acquire_console_sem();
 
 	printk(KERN_DEBUG "radeonfb (%s): resuming from state: %d...\n",
 	       pci_name(pdev), pdev->dev.power.power_state.event);
@@ -2783,7 +2784,7 @@ int radeonfb_pci_resume(struct pci_dev *pdev)
 	pdev->dev.power.power_state = PMSG_ON;
 
  bail:
-	console_unlock();
+	release_console_sem();
 
 	return rc;
 }
@@ -2872,7 +2873,7 @@ void radeonfb_pm_init(struct radeonfb_info *rinfo, int dynclk, int ignore_devlis
 		}
 
 #if 0
-		/* Power down TV DAC, that saves a significant amount of power,
+		/* Power down TV DAC, taht saves a significant amount of power,
 		 * we'll have something better once we actually have some TVOut
 		 * support
 		 */

@@ -20,10 +20,11 @@ int blk_rq_append_bio(struct request_queue *q, struct request *rq,
 		rq->biotail->bi_next = bio;
 		rq->biotail = bio;
 
-		rq->__data_len += bio->bi_size;
+		rq->data_len += bio->bi_size;
 	}
 	return 0;
 }
+EXPORT_SYMBOL(blk_rq_append_bio);
 
 static int __blk_rq_unmap_user(struct bio *bio)
 {
@@ -54,7 +55,7 @@ static int __blk_rq_map_user(struct request_queue *q, struct request *rq,
 	 * direct dma. else, set up kernel bounce buffers
 	 */
 	uaddr = (unsigned long) ubuf;
-	if (blk_rq_aligned(q, uaddr, len) && !map_data)
+	if (blk_rq_aligned(q, ubuf, len) && !map_data)
 		bio = bio_map_user(q, NULL, uaddr, len, reading, gfp_mask);
 	else
 		bio = bio_copy_user(q, map_data, uaddr, len, reading, gfp_mask);
@@ -115,7 +116,7 @@ int blk_rq_map_user(struct request_queue *q, struct request *rq,
 	struct bio *bio = NULL;
 	int ret;
 
-	if (len > (queue_max_hw_sectors(q) << 9))
+	if (len > (q->max_hw_sectors << 9))
 		return -EINVAL;
 	if (!len)
 		return -EINVAL;
@@ -155,7 +156,7 @@ int blk_rq_map_user(struct request_queue *q, struct request *rq,
 	if (!bio_flagged(bio, BIO_USER_MAPPED))
 		rq->cmd_flags |= REQ_COPY_USER;
 
-	rq->buffer = NULL;
+	rq->buffer = rq->data = NULL;
 	return 0;
 unmap_rq:
 	blk_rq_unmap_user(bio);
@@ -201,9 +202,6 @@ int blk_rq_map_user_iov(struct request_queue *q, struct request *rq,
 	for (i = 0; i < iov_count; i++) {
 		unsigned long uaddr = (unsigned long)iov[i].iov_base;
 
-		if (!iov[i].iov_len)
-			return -EINVAL;
-
 		if (uaddr & queue_dma_alignment(q)) {
 			unaligned = 1;
 			break;
@@ -237,7 +235,7 @@ int blk_rq_map_user_iov(struct request_queue *q, struct request *rq,
 	blk_queue_bounce(q, &bio);
 	bio_get(bio);
 	blk_rq_bio_prep(q, rq, bio);
-	rq->buffer = NULL;
+	rq->buffer = rq->data = NULL;
 	return 0;
 }
 EXPORT_SYMBOL(blk_rq_map_user_iov);
@@ -284,24 +282,21 @@ EXPORT_SYMBOL(blk_rq_unmap_user);
  *
  * Description:
  *    Data will be mapped directly if possible. Otherwise a bounce
- *    buffer is used. Can be called multple times to append multple
- *    buffers.
+ *    buffer is used.
  */
 int blk_rq_map_kern(struct request_queue *q, struct request *rq, void *kbuf,
 		    unsigned int len, gfp_t gfp_mask)
 {
 	int reading = rq_data_dir(rq) == READ;
-	unsigned long addr = (unsigned long) kbuf;
 	int do_copy = 0;
 	struct bio *bio;
-	int ret;
 
-	if (len > (queue_max_hw_sectors(q) << 9))
+	if (len > (q->max_hw_sectors << 9))
 		return -EINVAL;
 	if (!len || !kbuf)
 		return -EINVAL;
 
-	do_copy = !blk_rq_aligned(q, addr, len) || object_is_on_stack(kbuf);
+	do_copy = !blk_rq_aligned(q, kbuf, len) || object_is_on_stack(kbuf);
 	if (do_copy)
 		bio = bio_copy_kern(q, kbuf, len, gfp_mask, reading);
 	else
@@ -311,20 +306,14 @@ int blk_rq_map_kern(struct request_queue *q, struct request *rq, void *kbuf,
 		return PTR_ERR(bio);
 
 	if (rq_data_dir(rq) == WRITE)
-		bio->bi_rw |= REQ_WRITE;
+		bio->bi_rw |= (1 << BIO_RW);
 
 	if (do_copy)
 		rq->cmd_flags |= REQ_COPY_USER;
 
-	ret = blk_rq_append_bio(q, rq, bio);
-	if (unlikely(ret)) {
-		/* request is too big */
-		bio_put(bio);
-		return ret;
-	}
-
+	blk_rq_bio_prep(q, rq, bio);
 	blk_queue_bounce(q, &rq->bio);
-	rq->buffer = NULL;
+	rq->buffer = rq->data = NULL;
 	return 0;
 }
 EXPORT_SYMBOL(blk_rq_map_kern);

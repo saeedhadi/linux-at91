@@ -24,8 +24,6 @@
 /* Supports VIA VT8231 South Bridge embedded sensors
 */
 
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -38,7 +36,7 @@
 #include <linux/err.h>
 #include <linux/mutex.h>
 #include <linux/acpi.h>
-#include <linux/io.h>
+#include <asm/io.h>
 
 static int force_addr;
 module_param(force_addr, int, 0);
@@ -699,7 +697,7 @@ static struct platform_driver vt8231_driver = {
 	.remove	= __devexit_p(vt8231_remove),
 };
 
-static const struct pci_device_id vt8231_pci_ids[] = {
+static struct pci_device_id vt8231_pci_ids[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_VIA, PCI_DEVICE_ID_VIA_8231_4) },
 	{ 0, }
 };
@@ -904,19 +902,21 @@ static int __devinit vt8231_device_add(unsigned short address)
 	pdev = platform_device_alloc("vt8231", address);
 	if (!pdev) {
 		err = -ENOMEM;
-		pr_err("Device allocation failed\n");
+		printk(KERN_ERR "vt8231: Device allocation failed\n");
 		goto exit;
 	}
 
 	err = platform_device_add_resources(pdev, &res, 1);
 	if (err) {
-		pr_err("Device resource addition failed (%d)\n", err);
+		printk(KERN_ERR "vt8231: Device resource addition failed "
+		       "(%d)\n", err);
 		goto exit_device_put;
 	}
 
 	err = platform_device_add(pdev);
 	if (err) {
-		pr_err("Device addition failed (%d)\n", err);
+		printk(KERN_ERR "vt8231: Device addition failed (%d)\n",
+		       err);
 		goto exit_device_put;
 	}
 
@@ -948,7 +948,8 @@ static int __devinit vt8231_pci_probe(struct pci_dev *dev,
 
 	address = val & ~(VT8231_EXTENT - 1);
 	if (address == 0) {
-		dev_err(&dev->dev, "base address not set - upgrade BIOS or use force_addr=0xaddr\n");
+		dev_err(&dev->dev, "base address not set -\
+				 upgrade BIOS or use force_addr=0xaddr\n");
 		return -ENODEV;
 	}
 

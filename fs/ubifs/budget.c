@@ -54,18 +54,43 @@
  * @nr_to_write: how many dirty pages to write-back
  *
  * This function shrinks UBIFS liability by means of writing back some amount
- * of dirty inodes and their pages.
+ * of dirty inodes and their pages. Returns the amount of pages which were
+ * written back. The returned value does not include dirty inodes which were
+ * synchronized.
  *
  * Note, this function synchronizes even VFS inodes which are locked
  * (@i_mutex) by the caller of the budgeting function, because write-back does
  * not touch @i_mutex.
  */
-static void shrink_liability(struct ubifs_info *c, int nr_to_write)
+static int shrink_liability(struct ubifs_info *c, int nr_to_write)
 {
-	down_read(&c->vfs_sb->s_umount);
-	writeback_inodes_sb(c->vfs_sb);
-	up_read(&c->vfs_sb->s_umount);
+	int nr_written;
+	struct writeback_control wbc = {
+		.sync_mode   = WB_SYNC_NONE,
+		.range_end   = LLONG_MAX,
+		.nr_to_write = nr_to_write,
+	};
+
+	generic_sync_sb_inodes(c->vfs_sb, &wbc);
+	nr_written = nr_to_write - wbc.nr_to_write;
+
+	if (!nr_written) {
+		/*
+		 * Re-try again but wait on pages/inodes which are being
+		 * written-back concurrently (e.g., by pdflush).
+		 */
+		memset(&wbc, 0, sizeof(struct writeback_control));
+		wbc.sync_mode   = WB_SYNC_ALL;
+		wbc.range_end   = LLONG_MAX;
+		wbc.nr_to_write = nr_to_write;
+		generic_sync_sb_inodes(c->vfs_sb, &wbc);
+		nr_written = nr_to_write - wbc.nr_to_write;
+	}
+
+	dbg_budg("%d pages were written back", nr_written);
+	return nr_written;
 }
+
 
 /**
  * run_gc - run garbage collector.
@@ -147,7 +172,7 @@ static int make_free_space(struct ubifs_info *c)
 		if (liab2 < liab1)
 			return -EAGAIN;
 
-		dbg_budg("new liability %lld (not shrunk)", liab2);
+		dbg_budg("new liability %lld (not shrinked)", liab2);
 
 		/* Liability did not shrink again, try GC */
 		dbg_budg("Run GC");
@@ -603,7 +628,7 @@ void ubifs_convert_page_budget(struct ubifs_info *c)
  *
  * This function releases budget corresponding to a dirty inode. It is usually
  * called when after the inode has been written to the media and marked as
- * clean. It also causes the "no space" flags to be cleared.
+ * clean.
  */
 void ubifs_release_dirty_inode_budget(struct ubifs_info *c,
 				      struct ubifs_inode *ui)
@@ -611,7 +636,6 @@ void ubifs_release_dirty_inode_budget(struct ubifs_info *c,
 	struct ubifs_budget_req req;
 
 	memset(&req, 0, sizeof(struct ubifs_budget_req));
-	/* The "no space" flags will be cleared because dd_growth is > 0 */
 	req.dd_growth = c->inode_budget + ALIGN(ui->data_len, 8);
 	ubifs_release_budget(c, &req);
 }
@@ -717,7 +741,7 @@ long long ubifs_get_free_space_nolock(struct ubifs_info *c)
  * ubifs_get_free_space - return amount of free space.
  * @c: UBIFS file-system description object
  *
- * This function calculates and returns amount of free space to report to
+ * This function calculates and retuns amount of free space to report to
  * user-space.
  */
 long long ubifs_get_free_space(struct ubifs_info *c)

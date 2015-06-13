@@ -120,8 +120,4 @@
 #define	EOWNERDEAD	136	/* Owner died */
 #define	ENOTRECOVERABLE	137	/* State not recoverable */
 
-#define	ERFKILL		138	/* Operation not possible due to RF-kill */
-
-#define EHWPOISON	139	/* Memory page has hardware error */
-
 #endif

@@ -16,7 +16,6 @@
  */
 #include <linux/module.h>
 #include <linux/scatterlist.h>
-#include <linux/slab.h>
 #include <linux/err.h>
 #include "ima.h"
 
@@ -39,7 +38,7 @@ int ima_used_chip;
  * a different value.) Violations add a zero entry to the measurement
  * list and extend the aggregate PCR value with ff...ff's.
  */
-static void __init ima_add_boot_aggregate(void)
+static void ima_add_boot_aggregate(void)
 {
 	struct ima_template_entry *entry;
 	const char *op = "add_boot_aggregate";
@@ -72,7 +71,7 @@ err_out:
 			    audit_cause, result, 0);
 }
 
-int __init ima_init(void)
+int ima_init(void)
 {
 	u8 pcr_i[IMA_DIGEST_SIZE];
 	int rc;
@@ -83,7 +82,7 @@ int __init ima_init(void)
 		ima_used_chip = 1;
 
 	if (!ima_used_chip)
-		pr_info("IMA: No TPM chip found, activating TPM-bypass!\n");
+		pr_info("No TPM chip found, activating TPM-bypass!\n");
 
 	ima_add_boot_aggregate();	/* boot aggregate must be first entry */
 	ima_init_policy();

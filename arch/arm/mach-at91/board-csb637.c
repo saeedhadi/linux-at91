@@ -113,7 +113,7 @@ static struct gpio_led csb_leds[] = {
 		.gpio			= AT91_PIN_PB2,
 		.active_low		= 1,
 		.default_trigger	= "heartbeat",
-	},
+	}
 };
 
 static void __init csb637_board_init(void)
@@ -138,6 +138,8 @@ static void __init csb637_board_init(void)
 
 MACHINE_START(CSB637, "Cogent CSB637")
 	/* Maintainer: Bill Gatliff */
+	.phys_io	= AT91_BASE_SYS,
+	.io_pg_offst	= (AT91_VA_BASE_SYS >> 18) & 0xfffc,
 	.boot_params	= AT91_SDRAM_BASE + 0x100,
 	.timer		= &at91rm9200_timer,
 	.map_io		= csb637_map_io,

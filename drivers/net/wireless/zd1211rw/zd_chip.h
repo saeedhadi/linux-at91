@@ -546,7 +546,6 @@ enum {
 #define RX_FILTER_CTRL (RX_FILTER_RTS | RX_FILTER_CTS | \
 	RX_FILTER_CFEND | RX_FILTER_CFACK)
 
-#define BCN_MODE_AP			0x1000000
 #define BCN_MODE_IBSS			0x2000000
 
 /* Monitor mode sets filter to 0xfffff */
@@ -643,29 +642,13 @@ enum {
 #define CR_ZD1211B_TXOP			CTL_REG(0x0b20)
 #define CR_ZD1211B_RETRY_MAX		CTL_REG(0x0b28)
 
-/* Value for CR_ZD1211_RETRY_MAX & CR_ZD1211B_RETRY_MAX. Vendor driver uses 2,
- * we use 0. The first rate is tried (count+2), then all next rates are tried
- * twice, until 1 Mbits is tried. */
-#define	ZD1211_RETRY_COUNT		0
-#define	ZD1211B_RETRY_COUNT	\
-	(ZD1211_RETRY_COUNT <<  0)|	\
-	(ZD1211_RETRY_COUNT <<  8)|	\
-	(ZD1211_RETRY_COUNT << 16)|	\
-	(ZD1211_RETRY_COUNT << 24)
-
 /* Used to detect PLL lock */
 #define UW2453_INTR_REG			((zd_addr_t)0x85c1)
 
 #define CWIN_SIZE			0x007f043f
 
 
-#define HWINT_ENABLED			\
-	(INT_TX_COMPLETE_EN|		\
-	 INT_RX_COMPLETE_EN|		\
-	 INT_RETRY_FAIL_EN|		\
-	 INT_WAKEUP_EN|			\
-	 INT_CFG_NEXT_BCN_EN)
-
+#define HWINT_ENABLED			0x004f0000
 #define HWINT_DISABLED			0
 
 #define E2P_PWR_INT_GUARD		8
@@ -882,7 +865,6 @@ static inline u8 _zd_chip_get_channel(struct zd_chip *chip)
 u8  zd_chip_get_channel(struct zd_chip *chip);
 int zd_read_regdomain(struct zd_chip *chip, u8 *regdomain);
 int zd_write_mac_addr(struct zd_chip *chip, const u8 *mac_addr);
-int zd_write_bssid(struct zd_chip *chip, const u8 *bssid);
 int zd_chip_switch_radio_on(struct zd_chip *chip);
 int zd_chip_switch_radio_off(struct zd_chip *chip);
 int zd_chip_enable_int(struct zd_chip *chip);
@@ -915,15 +897,14 @@ int zd_chip_lock_phy_regs(struct zd_chip *chip);
 int zd_chip_unlock_phy_regs(struct zd_chip *chip);
 
 enum led_status {
-	ZD_LED_OFF = 0,
-	ZD_LED_SCANNING = 1,
-	ZD_LED_ASSOCIATED = 2,
+	LED_OFF = 0,
+	LED_SCANNING = 1,
+	LED_ASSOCIATED = 2,
 };
 
 int zd_chip_control_leds(struct zd_chip *chip, enum led_status status);
 
-int zd_set_beacon_interval(struct zd_chip *chip, u16 interval, u8 dtim_period,
-			   int type);
+int zd_set_beacon_interval(struct zd_chip *chip, u32 interval);
 
 static inline int zd_get_beacon_interval(struct zd_chip *chip, u32 *interval)
 {
@@ -931,6 +912,9 @@ static inline int zd_get_beacon_interval(struct zd_chip *chip, u32 *interval)
 }
 
 struct rx_status;
+
+u8 zd_rx_qual_percent(const void *rx_frame, unsigned int size,
+	               const struct rx_status *status);
 
 u8 zd_rx_rate(const void *rx_frame, const struct rx_status *status);
 

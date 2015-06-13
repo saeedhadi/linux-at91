@@ -19,7 +19,6 @@
 #include <linux/klist.h>
 #include <linux/agp_backend.h>
 #include <linux/log2.h>
-#include <linux/slab.h>
 
 #include <asm/parisc-device.h>
 #include <asm/ropes.h>
@@ -31,10 +30,6 @@
 
 #define AGP8X_MODE_BIT		3
 #define AGP8X_MODE		(1 << AGP8X_MODE_BIT)
-
-static unsigned long
-parisc_agp_mask_memory(struct agp_bridge_data *bridge, dma_addr_t addr,
-		       int type);
 
 static struct _parisc_agp_info {
 	void __iomem *ioc_regs;
@@ -154,12 +149,12 @@ parisc_agp_insert_memory(struct agp_memory *mem, off_t pg_start, int type)
 	for (i = 0, j = io_pg_start; i < mem->page_count; i++) {
 		unsigned long paddr;
 
-		paddr = page_to_phys(mem->pages[i]);
+		paddr = mem->memory[i];
 		for (k = 0;
 		     k < info->io_pages_per_kpage;
 		     k++, j++, paddr += info->io_page_size) {
 			info->gatt[j] =
-				parisc_agp_mask_memory(agp_bridge,
+				agp_bridge->driver->mask_memory(agp_bridge,
 					paddr, type);
 		}
 	}
@@ -190,8 +185,8 @@ parisc_agp_remove_memory(struct agp_memory *mem, off_t pg_start, int type)
 }
 
 static unsigned long
-parisc_agp_mask_memory(struct agp_bridge_data *bridge, dma_addr_t addr,
-		       int type)
+parisc_agp_mask_memory(struct agp_bridge_data *bridge,
+		    unsigned long addr, int type)
 {
 	return SBA_PDIR_VALID_BIT | addr;
 }
@@ -359,12 +354,8 @@ parisc_agp_setup(void __iomem *ioc_hpa, void __iomem *lba_hpa)
 	bridge->dev = fake_bridge_dev;
 
 	error = agp_add_bridge(bridge);
-	if (error)
-		goto fail;
-	return 0;
 
 fail:
-	kfree(fake_bridge_dev);
 	return error;
 }
 

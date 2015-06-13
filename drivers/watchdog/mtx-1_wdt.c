@@ -190,23 +190,23 @@ static ssize_t mtx1_wdt_write(struct file *file, const char *buf,
 }
 
 static const struct file_operations mtx1_wdt_fops = {
-	.owner		= THIS_MODULE,
+	.owner 		= THIS_MODULE,
 	.llseek		= no_llseek,
 	.unlocked_ioctl	= mtx1_wdt_ioctl,
-	.open		= mtx1_wdt_open,
-	.write		= mtx1_wdt_write,
-	.release	= mtx1_wdt_release,
+	.open 		= mtx1_wdt_open,
+	.write 		= mtx1_wdt_write,
+	.release 	= mtx1_wdt_release,
 };
 
 
 static struct miscdevice mtx1_wdt_misc = {
-	.minor	= WATCHDOG_MINOR,
-	.name	= "watchdog",
-	.fops	= &mtx1_wdt_fops,
+	.minor 	= WATCHDOG_MINOR,
+	.name 	= "watchdog",
+	.fops 	= &mtx1_wdt_fops,
 };
 
 
-static int __devinit mtx1_wdt_probe(struct platform_device *pdev)
+static int mtx1_wdt_probe(struct platform_device *pdev)
 {
 	int ret;
 
@@ -229,7 +229,7 @@ static int __devinit mtx1_wdt_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int __devexit mtx1_wdt_remove(struct platform_device *pdev)
+static int mtx1_wdt_remove(struct platform_device *pdev)
 {
 	/* FIXME: do we need to lock this test ? */
 	if (mtx1_wdt_device.queue) {
@@ -242,7 +242,7 @@ static int __devexit mtx1_wdt_remove(struct platform_device *pdev)
 
 static struct platform_driver mtx1_wdt = {
 	.probe = mtx1_wdt_probe,
-	.remove = __devexit_p(mtx1_wdt_remove),
+	.remove = mtx1_wdt_remove,
 	.driver.name = "mtx1-wdt",
 	.driver.owner = THIS_MODULE,
 };

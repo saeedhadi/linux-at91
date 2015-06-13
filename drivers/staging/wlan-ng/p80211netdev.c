@@ -49,6 +49,7 @@
 * --------------------------------------------------------------------
 */
 
+#include <linux/version.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
@@ -75,7 +76,9 @@
 
 #include <net/iw_handler.h>
 #include <net/net_namespace.h>
-#include <net/cfg80211.h>
+
+/*================================================================*/
+/* Project Includes */
 
 #include "p80211types.h"
 #include "p80211hdr.h"
@@ -87,8 +90,6 @@
 #include "p80211req.h"
 #include "p80211metastruct.h"
 #include "p80211metadef.h"
-
-#include "cfg80211.c"
 
 /* Support functions */
 static void p80211netdev_rx_bh(unsigned long arg);
@@ -150,7 +151,7 @@ static int p80211knetdev_init(netdevice_t *netdev)
 * Returns:
 *	the address of the statistics structure
 ----------------------------------------------------------------*/
-static struct net_device_stats *p80211knetdev_get_stats(netdevice_t * netdev)
+static struct net_device_stats *p80211knetdev_get_stats(netdevice_t *netdev)
 {
 	wlandevice_t *wlandev = netdev->ml_priv;
 
@@ -264,7 +265,7 @@ static void p80211netdev_rx_bh(unsigned long arg)
 	wlandevice_t *wlandev = (wlandevice_t *) arg;
 	struct sk_buff *skb = NULL;
 	netdevice_t *dev = wlandev->netdev;
-	struct p80211_hdr_a3 *hdr;
+	p80211_hdr_a3_t *hdr;
 	u16 fc;
 
 	/* Let's empty our our queue */
@@ -288,7 +289,7 @@ static void p80211netdev_rx_bh(unsigned long arg)
 				netif_rx_ni(skb);
 				continue;
 			} else {
-				hdr = (struct p80211_hdr_a3 *) skb->data;
+				hdr = (p80211_hdr_a3_t *) skb->data;
 				fc = le16_to_cpu(hdr->fc);
 				if (p80211_rx_typedrop(wlandev, fc)) {
 					dev_kfree_skb(skb);
@@ -301,8 +302,7 @@ static void p80211netdev_rx_bh(unsigned long arg)
 					if (memcmp
 					    (hdr->a1, wlandev->netdev->dev_addr,
 					     ETH_ALEN) != 0) {
-						/* but reject anything else that
-						   isn't multicast */
+						/* but reject anything else that isn't multicast */
 						if (!(hdr->a1[0] & 0x01)) {
 							dev_kfree_skb(skb);
 							continue;
@@ -351,19 +351,19 @@ static int p80211knetdev_hard_start_xmit(struct sk_buff *skb,
 	int result = 0;
 	int txresult = -1;
 	wlandevice_t *wlandev = netdev->ml_priv;
-	union p80211_hdr p80211_hdr;
-	struct p80211_metawep p80211_wep;
+	p80211_hdr_t p80211_hdr;
+	p80211_metawep_t p80211_wep;
 
 	if (skb == NULL)
-		return NETDEV_TX_OK;
+		return 0;
 
 	if (wlandev->state != WLAN_DEVICE_OPEN) {
 		result = 1;
 		goto failed;
 	}
 
-	memset(&p80211_hdr, 0, sizeof(union p80211_hdr));
-	memset(&p80211_wep, 0, sizeof(struct p80211_metawep));
+	memset(&p80211_hdr, 0, sizeof(p80211_hdr_t));
+	memset(&p80211_wep, 0, sizeof(p80211_metawep_t));
 
 	if (netif_queue_stopped(netdev)) {
 		pr_debug("called when queue stopped.\n");
@@ -402,15 +402,15 @@ static int p80211knetdev_hard_start_xmit(struct sk_buff *skb,
 			goto failed;
 		}
 		/* move the header over */
-		memcpy(&p80211_hdr, skb->data, sizeof(union p80211_hdr));
-		skb_pull(skb, sizeof(union p80211_hdr));
+		memcpy(&p80211_hdr, skb->data, sizeof(p80211_hdr_t));
+		skb_pull(skb, sizeof(p80211_hdr_t));
 	} else {
 		if (skb_ether_to_p80211
 		    (wlandev, wlandev->ethconv, skb, &p80211_hdr,
 		     &p80211_wep) != 0) {
 			/* convert failed */
 			pr_debug("ether_to_80211(%d) failed.\n",
-				 wlandev->ethconv);
+			       wlandev->ethconv);
 			result = 1;
 			goto failed;
 		}
@@ -432,27 +432,27 @@ static int p80211knetdev_hard_start_xmit(struct sk_buff *skb,
 		/* success and more buf */
 		/* avail, re: hw_txdata */
 		netif_wake_queue(wlandev->netdev);
-		result = NETDEV_TX_OK;
+		result = 0;
 	} else if (txresult == 1) {
 		/* success, no more avail */
 		pr_debug("txframe success, no more bufs\n");
 		/* netdev->tbusy = 1;  don't set here, irqhdlr */
 		/*   may have already cleared it */
-		result = NETDEV_TX_OK;
+		result = 0;
 	} else if (txresult == 2) {
 		/* alloc failure, drop frame */
 		pr_debug("txframe returned alloc_fail\n");
-		result = NETDEV_TX_BUSY;
+		result = 1;
 	} else {
 		/* buffer full or queue busy, drop frame. */
 		pr_debug("txframe returned full or busy\n");
-		result = NETDEV_TX_BUSY;
+		result = 1;
 	}
 
 failed:
 	/* Free up the WEP buffer if it's not the same as the skb */
 	if ((p80211_wep.data) && (p80211_wep.data != skb->data))
-		kzfree(p80211_wep.data);
+		kfree(p80211_wep.data);
 
 	/* we always free the skb here, never in a lower level. */
 	if (!result)
@@ -523,8 +523,8 @@ static int p80211netdev_ethtool(wlandevice_t *wlandev, void __user *useraddr)
 		if (copy_to_user(useraddr, &edata, sizeof(edata)))
 			return -EFAULT;
 		return 0;
-#endif
 	}
+#endif
 
 	return -EOPNOTSUPP;
 }
@@ -561,11 +561,13 @@ static int p80211netdev_ethtool(wlandevice_t *wlandev, void __user *useraddr)
 static int p80211knetdev_do_ioctl(netdevice_t *dev, struct ifreq *ifr, int cmd)
 {
 	int result = 0;
-	struct p80211ioctl_req *req = (struct p80211ioctl_req *) ifr;
+	p80211ioctl_req_t *req = (p80211ioctl_req_t *) ifr;
 	wlandevice_t *wlandev = dev->ml_priv;
 	u8 *msgbuf;
 
 	pr_debug("rx'd ioctl, cmd=%d, len=%d\n", cmd, req->len);
+
+	mutex_lock(&wlandev->ioctl_lock);
 
 #ifdef SIOCETHTOOL
 	if (cmd == SIOCETHTOOL) {
@@ -590,8 +592,7 @@ static int p80211knetdev_do_ioctl(netdevice_t *dev, struct ifreq *ifr, int cmd)
 	}
 
 	/* Allocate a buf of size req->len */
-	msgbuf = kmalloc(req->len, GFP_KERNEL);
-	if (msgbuf) {
+	if ((msgbuf = kmalloc(req->len, GFP_KERNEL))) {
 		if (copy_from_user(msgbuf, (void __user *)req->data, req->len))
 			result = -EFAULT;
 		else
@@ -608,8 +609,9 @@ static int p80211knetdev_do_ioctl(netdevice_t *dev, struct ifreq *ifr, int cmd)
 		result = -ENOMEM;
 	}
 bail:
-	/* If allocate,copyfrom or copyto fails, return errno */
-	return result;
+	mutex_unlock(&wlandev->ioctl_lock);
+
+	return result;		/* If allocate,copyfrom or copyto fails, return errno */
 }
 
 /*----------------------------------------------------------------
@@ -640,7 +642,7 @@ bail:
 static int p80211knetdev_set_mac_address(netdevice_t *dev, void *addr)
 {
 	struct sockaddr *new_addr = addr;
-	struct p80211msg_dot11req_mibset dot11req;
+	p80211msg_dot11req_mibset_t dot11req;
 	p80211item_unk392_t *mibattr;
 	p80211item_pstr6_t *macaddr;
 	p80211item_uint32_t *resultcode;
@@ -652,13 +654,13 @@ static int p80211knetdev_set_mac_address(netdevice_t *dev, void *addr)
 
 	/* Set up some convenience pointers. */
 	mibattr = &dot11req.mibattribute;
-	macaddr = (p80211item_pstr6_t *) &mibattr->data;
+	macaddr = (p80211item_pstr6_t *)&mibattr->data;
 	resultcode = &dot11req.resultcode;
 
 	/* Set up a dot11req_mibset */
-	memset(&dot11req, 0, sizeof(struct p80211msg_dot11req_mibset));
+	memset(&dot11req, 0, sizeof(p80211msg_dot11req_mibset_t));
 	dot11req.msgcode = DIDmsg_dot11req_mibset;
-	dot11req.msglen = sizeof(struct p80211msg_dot11req_mibset);
+	dot11req.msglen = sizeof(p80211msg_dot11req_mibset_t);
 	memcpy(dot11req.devname,
 	       ((wlandevice_t *) dev->ml_priv)->name, WLAN_DEVNAMELEN_MAX - 1);
 
@@ -680,7 +682,7 @@ static int p80211knetdev_set_mac_address(netdevice_t *dev, void *addr)
 	resultcode->data = 0;
 
 	/* now fire the request */
-	result = p80211req_dorequest(dev->ml_priv, (u8 *) &dot11req);
+	result = p80211req_dorequest(dev->ml_priv, (u8 *)&dot11req);
 
 	/* If the request wasn't successful, report an error and don't
 	 * change the netdev address
@@ -710,17 +712,17 @@ static int wlan_change_mtu(netdevice_t *dev, int new_mtu)
 }
 
 static const struct net_device_ops p80211_netdev_ops = {
-	.ndo_init = p80211knetdev_init,
-	.ndo_open = p80211knetdev_open,
-	.ndo_stop = p80211knetdev_stop,
-	.ndo_get_stats = p80211knetdev_get_stats,
-	.ndo_start_xmit = p80211knetdev_hard_start_xmit,
-	.ndo_set_multicast_list = p80211knetdev_set_multicast_list,
-	.ndo_do_ioctl = p80211knetdev_do_ioctl,
-	.ndo_set_mac_address = p80211knetdev_set_mac_address,
-	.ndo_tx_timeout = p80211knetdev_tx_timeout,
-	.ndo_change_mtu = wlan_change_mtu,
-	.ndo_validate_addr = eth_validate_addr,
+	.ndo_init		= p80211knetdev_init,
+	.ndo_open		= p80211knetdev_open,
+	.ndo_stop		= p80211knetdev_stop,
+	.ndo_get_stats		= p80211knetdev_get_stats,
+	.ndo_start_xmit		= p80211knetdev_hard_start_xmit,
+	.ndo_set_multicast_list	= p80211knetdev_set_multicast_list,
+	.ndo_do_ioctl		= p80211knetdev_do_ioctl,
+	.ndo_set_mac_address	= p80211knetdev_set_mac_address,
+	.ndo_tx_timeout		= p80211knetdev_tx_timeout,
+	.ndo_change_mtu		= wlan_change_mtu,
+	.ndo_validate_addr	= eth_validate_addr,
 };
 
 /*----------------------------------------------------------------
@@ -737,7 +739,6 @@ static const struct net_device_ops p80211_netdev_ops = {
 * Arguments:
 *	wlandev		ptr to the wlandev structure for the
 *			interface.
-*	physdev		ptr to usb device
 * Returns:
 *	zero on success, non-zero otherwise.
 * Call Context:
@@ -746,12 +747,10 @@ static const struct net_device_ops p80211_netdev_ops = {
 *	compiled drivers, this function will be called in the
 *	context of the kernel startup code.
 ----------------------------------------------------------------*/
-int wlan_setup(wlandevice_t *wlandev, struct device *physdev)
+int wlan_setup(wlandevice_t *wlandev)
 {
 	int result = 0;
-	netdevice_t *netdev;
-	struct wiphy *wiphy;
-	struct wireless_dev *wdev;
+	netdevice_t *dev;
 
 	/* Set up the wlandev */
 	wlandev->state = WLAN_DEVICE_CLOSED;
@@ -763,31 +762,28 @@ int wlan_setup(wlandevice_t *wlandev, struct device *physdev)
 	tasklet_init(&wlandev->rx_bh,
 		     p80211netdev_rx_bh, (unsigned long)wlandev);
 
-	/* Allocate and initialize the wiphy struct */
-	wiphy = wlan_create_wiphy(physdev, wlandev);
-	if (wiphy == NULL) {
-		printk(KERN_ERR "Failed to alloc wiphy.\n");
-		return 1;
-	}
-
 	/* Allocate and initialize the struct device */
-	netdev = alloc_netdev(sizeof(struct wireless_dev), "wlan%d",
-				ether_setup);
-	if (netdev == NULL) {
+	dev = alloc_netdev(0, "wlan%d", ether_setup);
+	if (dev == NULL) {
 		printk(KERN_ERR "Failed to alloc netdev.\n");
-		wlan_free_wiphy(wiphy);
 		result = 1;
 	} else {
-		wlandev->netdev = netdev;
-		netdev->ml_priv = wlandev;
-		netdev->netdev_ops = &p80211_netdev_ops;
-		wdev = netdev_priv(netdev);
-		wdev->wiphy = wiphy;
-		wdev->iftype = NL80211_IFTYPE_STATION;
-		netdev->ieee80211_ptr = wdev;
+		wlandev->netdev = dev;
+		dev->ml_priv = wlandev;
+		dev->netdev_ops = &p80211_netdev_ops;
 
-		netif_stop_queue(netdev);
-		netif_carrier_off(netdev);
+		mutex_init(&wlandev->ioctl_lock);
+		/* block ioctls until fully initialised. Don't forget to call
+		   allow_ioctls at some point!*/
+		mutex_lock(&wlandev->ioctl_lock);
+
+#if (WIRELESS_EXT < 21)
+		dev->get_wireless_stats = p80211wext_get_wireless_stats;
+#endif
+		dev->wireless_handlers = &p80211wext_handler_def;
+
+		netif_stop_queue(dev);
+		netif_carrier_off(dev);
 	}
 
 	return result;
@@ -816,14 +812,14 @@ int wlan_setup(wlandevice_t *wlandev, struct device *physdev)
 ----------------------------------------------------------------*/
 int wlan_unsetup(wlandevice_t *wlandev)
 {
-	struct wireless_dev *wdev;
+	int result = 0;
 
 	tasklet_kill(&wlandev->rx_bh);
 
-	if (wlandev->netdev) {
-		wdev = netdev_priv(wlandev->netdev);
-		if (wdev->wiphy)
-			wlan_free_wiphy(wdev->wiphy);
+	if (wlandev->netdev == NULL) {
+		printk(KERN_ERR "called without wlandev->netdev set.\n");
+		result = 1;
+	} else {
 		free_netdev(wlandev->netdev);
 		wlandev->netdev = NULL;
 	}
@@ -1120,4 +1116,9 @@ static void p80211knetdev_tx_timeout(netdevice_t *netdev)
 		       wlandev->nsdname);
 		netif_wake_queue(wlandev->netdev);
 	}
+}
+
+void p80211_allow_ioctls(wlandevice_t *wlandev)
+{
+	mutex_unlock(&wlandev->ioctl_lock);
 }

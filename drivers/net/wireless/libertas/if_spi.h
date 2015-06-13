@@ -22,8 +22,10 @@
 #define IF_SPI_CMD_BUF_SIZE 2400
 
 /***************** Firmware *****************/
-
-#define IF_SPI_FW_NAME_MAX 30
+struct chip_ident {
+	u16 chip_id;
+	u16 name;
+};
 
 #define MAX_MAIN_FW_LOAD_CRC_ERR 10
 
@@ -66,7 +68,7 @@
 #define IF_SPI_HOST_INT_CTRL_REG 0x40	/* Host interrupt controller reg */
 
 #define IF_SPI_CARD_INT_CAUSE_REG 0x44	/* Card interrupt cause reg */
-#define IF_SPI_CARD_INT_STATUS_REG 0x48 /* Card interrupt status reg */
+#define IF_SPI_CARD_INT_STATUS_REG 0x48 /* Card interupt status reg */
 #define IF_SPI_CARD_INT_EVENT_MASK_REG 0x4C /* Card interrupt event mask */
 #define IF_SPI_CARD_INT_STATUS_MASK_REG	0x50 /* Card interrupt status mask */
 

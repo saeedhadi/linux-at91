@@ -56,7 +56,7 @@
  * IV. Notes
  * The current error (XDU, RFO) recovery code is untested.
  * So far, RDO takes his RX channel down and the right sequence to enable it
- * again is still a mystery. If RDO happens, plan a reboot. More details
+ * again is still a mistery. If RDO happens, plan a reboot. More details
  * in the code (NB: as this happens, TX still works).
  * Don't mess the cables during operation, especially on DTE ports. I don't
  * suggest it for DCE either but at least one can get some messages instead
@@ -81,7 +81,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/sched.h>
 #include <linux/types.h>
 #include <linux/errno.h>
 #include <linux/list.h>
@@ -89,7 +88,6 @@
 #include <linux/pci.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
-#include <linux/slab.h>
 
 #include <asm/system.h>
 #include <asm/cache.h>
@@ -125,7 +123,7 @@ static u32 dscc4_pci_config_store[16];
 /* Module parameters */
 
 MODULE_AUTHOR("Maintainer: Francois Romieu <romieu@cogenit.fr>");
-MODULE_DESCRIPTION("Siemens PEB20534 PCI Controller");
+MODULE_DESCRIPTION("Siemens PEB20534 PCI Controler");
 MODULE_LICENSE("GPL");
 module_param(debug, int, 0);
 MODULE_PARM_DESC(debug,"Enable/disable extra messages");
@@ -361,8 +359,7 @@ static void dscc4_tx_irq(struct dscc4_pci_priv *, struct dscc4_dev_priv *);
 static int dscc4_found1(struct pci_dev *, void __iomem *ioaddr);
 static int dscc4_init_one(struct pci_dev *, const struct pci_device_id *ent);
 static int dscc4_open(struct net_device *);
-static netdev_tx_t dscc4_start_xmit(struct sk_buff *,
-					  struct net_device *);
+static int dscc4_start_xmit(struct sk_buff *, struct net_device *);
 static int dscc4_close(struct net_device *);
 static int dscc4_ioctl(struct net_device *dev, struct ifreq *rq, int cmd);
 static int dscc4_init_ring(struct net_device *);
@@ -666,12 +663,12 @@ static inline void dscc4_rx_skb(struct dscc4_dev_priv *dpriv,
 	} else {
 		if (skb->data[pkt_len] & FrameRdo)
 			dev->stats.rx_fifo_errors++;
-		else if (!(skb->data[pkt_len] & FrameCrc))
+		else if (!(skb->data[pkt_len] | ~FrameCrc))
 			dev->stats.rx_crc_errors++;
-		else if ((skb->data[pkt_len] & (FrameVfr | FrameRab)) !=
-			 (FrameVfr | FrameRab))
+		else if (!(skb->data[pkt_len] | ~(FrameVfr | FrameRab)))
 			dev->stats.rx_length_errors++;
-		dev->stats.rx_errors++;
+		else
+			dev->stats.rx_errors++;
 		dev_kfree_skb_irq(skb);
 	}
 refill:
@@ -1065,7 +1062,7 @@ static int dscc4_open(struct net_device *dev)
 
 	/*
 	 * Due to various bugs, there is no way to reliably reset a
-	 * specific port (manufacturer's dependent special PCI #RST wiring
+	 * specific port (manufacturer's dependant special PCI #RST wiring
 	 * apart: it affects all ports). Thus the device goes in the best
 	 * silent mode possible at dscc4_close() time and simply claims to
 	 * be up if it's opened again. It still isn't possible to change
@@ -1129,7 +1126,7 @@ done:
         init_timer(&dpriv->timer);
         dpriv->timer.expires = jiffies + 10*HZ;
         dpriv->timer.data = (unsigned long)dev;
-	dpriv->timer.function = dscc4_timer;
+        dpriv->timer.function = &dscc4_timer;
         add_timer(&dpriv->timer);
 	netif_carrier_on(dev);
 
@@ -1151,8 +1148,7 @@ static int dscc4_tx_poll(struct dscc4_dev_priv *dpriv, struct net_device *dev)
 }
 #endif /* DSCC4_POLLING */
 
-static netdev_tx_t dscc4_start_xmit(struct sk_buff *skb,
-					  struct net_device *dev)
+static int dscc4_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct dscc4_dev_priv *dpriv = dscc4_priv(dev);
 	struct dscc4_pci_priv *ppriv = dpriv->pci_priv;
@@ -1175,6 +1171,8 @@ static netdev_tx_t dscc4_start_xmit(struct sk_buff *skb,
 	spin_unlock(&dpriv->lock);
 #endif
 
+	dev->trans_start = jiffies;
+
 	if (debug > 2)
 		dscc4_tx_print(dev, dpriv, "Xmit");
 	/* To be cleaned(unsigned int)/optimized. Later, ok ? */
@@ -1184,7 +1182,7 @@ static netdev_tx_t dscc4_start_xmit(struct sk_buff *skb,
 	if (dscc4_tx_quiescent(dpriv, dev))
 		dscc4_do_tx(dpriv, dev);
 
-	return NETDEV_TX_OK;
+	return 0;
 }
 
 static int dscc4_close(struct net_device *dev)
@@ -1230,9 +1228,9 @@ static inline int dscc4_check_clock_ability(int port)
  *   scaling. Of course some rounding may take place.
  * - no high speed mode (40Mb/s). May be trivial to do but I don't have an
  *   appropriate external clocking device for testing.
- * - no time-slot/clock mode 5: shameless laziness.
+ * - no time-slot/clock mode 5: shameless lazyness.
  *
- * The clock signals wiring can be (is ?) manufacturer dependent. Good luck.
+ * The clock signals wiring can be (is ?) manufacturer dependant. Good luck.
  *
  * BIG FAT WARNING: if the device isn't provided enough clocking signal, it
  * won't pass the init sequence. For example, straight back-to-back DTE without
@@ -1358,7 +1356,7 @@ static int dscc4_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 	return ret;
 }
 
-static int dscc4_match(const struct thingie *p, int value)
+static int dscc4_match(struct thingie *p, int value)
 {
 	int i;
 
@@ -1403,7 +1401,7 @@ done:
 static int dscc4_encoding_setting(struct dscc4_dev_priv *dpriv,
 				  struct net_device *dev)
 {
-	static const struct thingie encoding[] = {
+	struct thingie encoding[] = {
 		{ ENCODING_NRZ,		0x00000000 },
 		{ ENCODING_NRZI,	0x00200000 },
 		{ ENCODING_FM_MARK,	0x00400000 },
@@ -1442,7 +1440,7 @@ static int dscc4_loopback_setting(struct dscc4_dev_priv *dpriv,
 static int dscc4_crc_setting(struct dscc4_dev_priv *dpriv,
 			     struct net_device *dev)
 {
-	static const struct thingie crc[] = {
+	struct thingie crc[] = {
 		{ PARITY_CRC16_PR0_CCITT,	0x00000010 },
 		{ PARITY_CRC16_PR1_CCITT,	0x00000000 },
 		{ PARITY_CRC32_PR0_CCITT,	0x00000011 },
@@ -2049,7 +2047,7 @@ static int __init dscc4_setup(char *str)
 __setup("dscc4.setup=", dscc4_setup);
 #endif
 
-static DEFINE_PCI_DEVICE_TABLE(dscc4_pci_tbl) = {
+static struct pci_device_id dscc4_pci_tbl[] = {
 	{ PCI_VENDOR_ID_SIEMENS, PCI_DEVICE_ID_SIEMENS_DSCC4,
 	        PCI_ANY_ID, PCI_ANY_ID, },
 	{ 0,}

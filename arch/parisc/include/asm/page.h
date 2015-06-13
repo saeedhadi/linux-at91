@@ -159,6 +159,6 @@ extern int npmem_ranges;
 				 VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)
 
 #include <asm-generic/memory_model.h>
-#include <asm-generic/getorder.h>
+#include <asm-generic/page.h>
 
 #endif /* _PARISC_PAGE_H */

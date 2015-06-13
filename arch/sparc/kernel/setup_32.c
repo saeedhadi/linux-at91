@@ -95,6 +95,8 @@ static void prom_sync_me(void)
 			     "nop\n\t"
 			     "nop\n\t" : : "r" (prom_tbr));
 	local_irq_restore(flags);
+
+	return;
 }
 
 static unsigned int boot_flags __initdata = 0;
@@ -184,6 +186,8 @@ static void __init boot_flags_init(char *commands)
  */
 
 extern void sun4c_probe_vac(void);
+extern char cputypval;
+extern unsigned long start, end;
 
 extern unsigned short root_flags;
 extern unsigned short root_dev;
@@ -208,7 +212,7 @@ void __init setup_arch(char **cmdline_p)
 	int i;
 	unsigned long highest_paddr;
 
-	sparc_ttable = (struct tt_entry *) &trapbase;
+	sparc_ttable = (struct tt_entry *) &start;
 
 	/* Initialize PROM console and command line. */
 	*cmdline_p = prom_getbootargs();
@@ -217,22 +221,20 @@ void __init setup_arch(char **cmdline_p)
 
 	/* Set sparc_cpu_model */
 	sparc_cpu_model = sun_unknown;
-	if (!strcmp(&cputypval[0], "sun4 "))
+	if (!strcmp(&cputypval,"sun4 "))
 		sparc_cpu_model = sun4;
-	if (!strcmp(&cputypval[0], "sun4c"))
+	if (!strcmp(&cputypval,"sun4c"))
 		sparc_cpu_model = sun4c;
-	if (!strcmp(&cputypval[0], "sun4m"))
+	if (!strcmp(&cputypval,"sun4m"))
 		sparc_cpu_model = sun4m;
-	if (!strcmp(&cputypval[0], "sun4s"))
+	if (!strcmp(&cputypval,"sun4s"))
 		sparc_cpu_model = sun4m; /* CP-1200 with PROM 2.30 -E */
-	if (!strcmp(&cputypval[0], "sun4d"))
+	if (!strcmp(&cputypval,"sun4d"))
 		sparc_cpu_model = sun4d;
-	if (!strcmp(&cputypval[0], "sun4e"))
+	if (!strcmp(&cputypval,"sun4e"))
 		sparc_cpu_model = sun4e;
-	if (!strcmp(&cputypval[0], "sun4u"))
+	if (!strcmp(&cputypval,"sun4u"))
 		sparc_cpu_model = sun4u;
-	if (!strncmp(&cputypval[0], "leon" , 4))
-		sparc_cpu_model = sparc_leon;
 
 	printk("ARCH: ");
 	switch(sparc_cpu_model) {
@@ -254,9 +256,6 @@ void __init setup_arch(char **cmdline_p)
 	case sun4u:
 		printk("SUN4U\n");
 		break;
-	case sparc_leon:
-		printk("LEON\n");
-		break;
 	default:
 		printk("UNKNOWN!\n");
 		break;
@@ -264,6 +263,8 @@ void __init setup_arch(char **cmdline_p)
 
 #ifdef CONFIG_DUMMY_CONSOLE
 	conswitchp = &dummy_con;
+#elif defined(CONFIG_PROM_CONSOLE)
+	conswitchp = &prom_con;
 #endif
 	boot_flags_init(*cmdline_p);
 
@@ -334,7 +335,7 @@ static int show_cpuinfo(struct seq_file *m, void *__unused)
 		   prom_rev,
 		   romvec->pv_printrev >> 16,
 		   romvec->pv_printrev & 0xffff,
-		   &cputypval[0],
+		   &cputypval,
 		   ncpus_probed,
 		   num_online_cpus()
 #ifndef CONFIG_SMP

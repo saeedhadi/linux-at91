@@ -2706,7 +2706,7 @@ struct rx_pkt_hdr0 {
 #if defined(__LITTLE_ENDIAN_BITFIELD)
 	u8	inputport:2,
 		maccheck:1,
-		class:5;
+		class:4;
 	u8	vlan:1,
 		llcsnap:1,
 		noport:1,
@@ -2715,7 +2715,7 @@ struct rx_pkt_hdr0 {
 		tres:2,
 		tzfvld:1;
 #elif defined(__BIG_ENDIAN_BITFIELD)
-	u8	class:5,
+	u8	class:4,
 		maccheck:1,
 		inputport:2;
 	u8	tzfvld:1,
@@ -2774,9 +2774,6 @@ struct rx_pkt_hdr1 {
 
 	/* Bits 7:0 of hash value, H1.  */
 	u8	hashval1_2;
-
-	u8	hwrsvd5;
-	u8	hwrsvd6;
 
 	u8	usrdata_0;	/* Bits 39:32 of user data.  */
 	u8	usrdata_1;	/* Bits 31:24 of user data.  */
@@ -3236,7 +3233,7 @@ struct niu_phy_ops {
 	int (*link_status)(struct niu *np, int *);
 };
 
-struct platform_device;
+struct of_device;
 struct niu {
 	void __iomem			*regs;
 	struct net_device		*dev;
@@ -3245,8 +3242,8 @@ struct niu {
 	struct niu_parent		*parent;
 
 	u32				flags;
-#define NIU_FLAGS_HOTPLUG_PHY_PRESENT	0x02000000 /* Removeable PHY detected*/
-#define NIU_FLAGS_HOTPLUG_PHY		0x01000000 /* Removeable PHY */
+#define NIU_FLAGS_HOTPLUG_PHY_PRESENT	0x02000000 /* Removebale PHY detected*/
+#define NIU_FLAGS_HOTPLUG_PHY		0x01000000 /* Removebale PHY */
 #define NIU_FLAGS_VPD_VALID		0x00800000 /* VPD has valid version */
 #define NIU_FLAGS_MSIX			0x00400000 /* MSI-X in use */
 #define NIU_FLAGS_MCAST			0x00200000 /* multicast filter enabled */
@@ -3297,7 +3294,7 @@ struct niu {
 	struct niu_vpd			vpd;
 	u32				eeprom_len;
 
-	struct platform_device		*op;
+	struct of_device		*op;
 	void __iomem			*vir_regs_1;
 	void __iomem			*vir_regs_2;
 };

@@ -20,12 +20,23 @@
 #include <asm/apic.h>
 #include <asm/setup.h>
 
+#include <linux/threads.h>
+#include <linux/cpumask.h>
+#include <asm/mpspec.h>
+#include <asm/fixmap.h>
+#include <asm/apicdef.h>
+#include <linux/kernel.h>
+#include <linux/string.h>
 #include <linux/smp.h>
+#include <linux/init.h>
 #include <asm/ipi.h>
 
+#include <linux/smp.h>
+#include <linux/init.h>
 #include <linux/interrupt.h>
 #include <asm/acpi.h>
 #include <asm/e820.h>
+#include <asm/setup.h>
 
 #ifdef CONFIG_HOTPLUG_CPU
 #define DEFAULT_SEND_IPI	(1)
@@ -52,37 +63,7 @@ static int __init print_ipi_mode(void)
 }
 late_initcall(print_ipi_mode);
 
-void __init default_setup_apic_routing(void)
-{
-	int version = apic_version[boot_cpu_physical_apicid];
-
-	if (num_possible_cpus() > 8) {
-		switch (boot_cpu_data.x86_vendor) {
-		case X86_VENDOR_INTEL:
-			if (!APIC_XAPIC(version)) {
-				def_to_bigsmp = 0;
-				break;
-			}
-			/* If P4 and above fall through */
-		case X86_VENDOR_AMD:
-			def_to_bigsmp = 1;
-		}
-	}
-
-#ifdef CONFIG_X86_BIGSMP
-	generic_bigsmp_probe();
-#endif
-
-	if (apic->setup_apic_routing)
-		apic->setup_apic_routing();
-}
-
-static int default_x86_32_early_logical_apicid(int cpu)
-{
-	return 1 << cpu;
-}
-
-static void setup_apic_flat_routing(void)
+void default_setup_apic_routing(void)
 {
 #ifdef CONFIG_X86_IO_APIC
 	printk(KERN_INFO
@@ -133,10 +114,12 @@ struct apic apic_default = {
 	.init_apic_ldr			= default_init_apic_ldr,
 
 	.ioapic_phys_id_map		= default_ioapic_phys_id_map,
-	.setup_apic_routing		= setup_apic_flat_routing,
+	.setup_apic_routing		= default_setup_apic_routing,
 	.multi_timer_check		= NULL,
+	.apicid_to_node			= default_apicid_to_node,
+	.cpu_to_logical_apicid		= default_cpu_to_logical_apicid,
 	.cpu_present_to_apicid		= default_cpu_present_to_apicid,
-	.apicid_to_cpu_present		= physid_set_mask_of_physid,
+	.apicid_to_cpu_present		= default_apicid_to_cpu_present,
 	.setup_portio_remap		= NULL,
 	.check_phys_apicid_present	= default_check_phys_apicid_present,
 	.enable_apic_mode		= NULL,
@@ -170,9 +153,6 @@ struct apic apic_default = {
 	.icr_write			= native_apic_icr_write,
 	.wait_icr_idle			= native_apic_wait_icr_idle,
 	.safe_wait_icr_idle		= native_safe_apic_wait_icr_idle,
-
-	.x86_32_early_logical_apicid	= default_x86_32_early_logical_apicid,
-	.x86_32_numa_cpu_node		= default_x86_32_numa_cpu_node,
 };
 
 extern struct apic apic_numaq;
@@ -180,6 +160,7 @@ extern struct apic apic_summit;
 extern struct apic apic_bigsmp;
 extern struct apic apic_es7000;
 extern struct apic apic_es7000_cluster;
+extern struct apic apic_default;
 
 struct apic *apic = &apic_default;
 EXPORT_SYMBOL_GPL(apic);

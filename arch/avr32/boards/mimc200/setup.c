@@ -43,16 +43,16 @@ unsigned long at32_board_osc_rates[3] = {
 /* Initialized by bootloader-specific startup code. */
 struct tag *bootloader_tags __initdata;
 
-static struct fb_videomode __initdata pt0434827_modes[] = {
+static struct fb_videomode __initdata tx14d14_modes[] = {
 	{
-		.name		= "480x272 @ 72",
-		.refresh	= 72,
-		.xres		= 480,		.yres		= 272,
-		.pixclock	= KHZ2PICOS(10000),
+		.name		= "640x480 @ 60",
+		.refresh	= 60,
+		.xres		= 640,		.yres		= 480,
+		.pixclock	= KHZ2PICOS(11666),
 
-		.left_margin	= 1,		.right_margin	= 1,
-		.upper_margin	= 12,		.lower_margin	= 1,
-		.hsync_len	= 42,		.vsync_len	= 1,
+		.left_margin	= 80,		.right_margin	= 1,
+		.upper_margin	= 13,		.lower_margin	= 2,
+		.hsync_len	= 64,		.vsync_len	= 1,
 
 		.sync		= 0,
 		.vmode		= FB_VMODE_NONINTERLACED,
@@ -60,14 +60,14 @@ static struct fb_videomode __initdata pt0434827_modes[] = {
 };
 
 static struct fb_monspecs __initdata mimc200_default_monspecs = {
-	.manufacturer		= "PT",
-	.monitor		= "PT0434827-A401",
-	.modedb			= pt0434827_modes,
-	.modedb_len		= ARRAY_SIZE(pt0434827_modes),
+	.manufacturer		= "HIT",
+	.monitor		= "TX14D14VM1BAB",
+	.modedb			= tx14d14_modes,
+	.modedb_len		= ARRAY_SIZE(tx14d14_modes),
 	.hfmin			= 14820,
 	.hfmax			= 22230,
 	.vfmin			= 60,
-	.vfmax			= 85,
+	.vfmax			= 73.3,
 	.dclkmax		= 25200000,
 };
 
@@ -162,7 +162,7 @@ static void __init set_hw_addr(struct platform_device *pdev)
 	 */
 	regs = (void __iomem __force *)res->start;
 	pclk = clk_get(&pdev->dev, "pclk");
-	if (IS_ERR(pclk))
+	if (!pclk)
 		return;
 
 	clk_enable(pclk);
@@ -228,8 +228,7 @@ static int __init mimc200_init(void)
 	i2c_register_board_info(0, i2c_info, ARRAY_SIZE(i2c_info));
 
 	at32_add_device_lcdc(0, &mimc200_lcdc_data,
-			     fbmem_start, fbmem_size,
-			     ATMEL_LCDC_CONTROL | ATMEL_LCDC_ALT_CONTROL | ATMEL_LCDC_ALT_24B_DATA);
+			     fbmem_start, fbmem_size, 1);
 
 	return 0;
 }

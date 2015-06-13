@@ -17,7 +17,6 @@
 
 #include <linux/module.h>
 #include <linux/init.h>
-#include <linux/slab.h>
 #include <linux/usb.h>
 #include <dvb-usb.h>
 
@@ -35,7 +34,7 @@ typedef struct device_extension_s {
 #define MAX_DEVICES 256
 
 static pdevice_extension_t s2250_dev_table[MAX_DEVICES];
-static DEFINE_MUTEX(s2250_dev_table_mutex);
+static DECLARE_MUTEX(s2250_dev_table_mutex);
 
 #define to_s2250loader_dev_common(d) container_of(d, device_extension_t, kref)
 static void s2250loader_delete(struct kref *kref)
@@ -67,7 +66,7 @@ static int s2250loader_probe(struct usb_interface *interface,
 		printk(KERN_ERR "can't handle multiple config\n");
 		return -1;
 	}
-	mutex_lock(&s2250_dev_table_mutex);
+	down(&s2250_dev_table_mutex);
 
 	for (minor = 0; minor < MAX_DEVICES; minor++) {
 		if (s2250_dev_table[minor] == NULL)
@@ -96,7 +95,7 @@ static int s2250loader_probe(struct usb_interface *interface,
 
 	kref_init(&(s->kref));
 
-	mutex_unlock(&s2250_dev_table_mutex);
+	up(&s2250_dev_table_mutex);
 
 	if (request_firmware(&fw, S2250_LOADER_FIRMWARE, &usbdev->dev)) {
 		printk(KERN_ERR
@@ -128,7 +127,7 @@ static int s2250loader_probe(struct usb_interface *interface,
 	return 0;
 
 failed:
-	mutex_unlock(&s2250_dev_table_mutex);
+	up(&s2250_dev_table_mutex);
 failed2:
 	if (s)
 		kref_put(&(s->kref), s2250loader_delete);
@@ -139,14 +138,16 @@ failed2:
 
 static void s2250loader_disconnect(struct usb_interface *interface)
 {
-	pdevice_extension_t s;
+	pdevice_extension_t s = usb_get_intfdata(interface);
 	printk(KERN_INFO "s2250: disconnect\n");
+	lock_kernel();
 	s = usb_get_intfdata(interface);
 	usb_set_intfdata(interface, NULL);
 	kref_put(&(s->kref), s2250loader_delete);
+	unlock_kernel();
 }
 
-static const struct usb_device_id s2250loader_ids[] = {
+static struct usb_device_id s2250loader_ids[] = {
 	{USB_DEVICE(0x1943, 0xa250)},
 	{}                          /* Terminating entry */
 };
@@ -160,7 +161,7 @@ static struct usb_driver s2250loader_driver = {
 	.id_table	= s2250loader_ids,
 };
 
-static int __init s2250loader_init(void)
+int s2250loader_init(void)
 {
 	int r;
 	unsigned i = 0;
@@ -177,15 +178,11 @@ static int __init s2250loader_init(void)
 	printk(KERN_INFO "s2250loader_init: driver registered\n");
 	return 0;
 }
-module_init(s2250loader_init);
+EXPORT_SYMBOL(s2250loader_init);
 
-static void __exit s2250loader_cleanup(void)
+void s2250loader_cleanup(void)
 {
 	printk(KERN_INFO "s2250loader_cleanup\n");
 	usb_deregister(&s2250loader_driver);
 }
-module_exit(s2250loader_cleanup);
-
-MODULE_AUTHOR("");
-MODULE_DESCRIPTION("firmware loader for Sensoray 2250/2251");
-MODULE_LICENSE("GPL v2");
+EXPORT_SYMBOL(s2250loader_cleanup);

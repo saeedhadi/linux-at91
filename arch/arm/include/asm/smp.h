@@ -33,23 +33,32 @@ struct seq_file;
 /*
  * generate IPI list text
  */
-extern void show_ipi_list(struct seq_file *, int);
+extern void show_ipi_list(struct seq_file *p);
 
 /*
  * Called from assembly code, this handles an IPI.
  */
-asmlinkage void do_IPI(int ipinr, struct pt_regs *regs);
+asmlinkage void do_IPI(struct pt_regs *regs);
 
 /*
- * Setup the set of possible CPUs (via set_cpu_possible)
+ * Setup the SMP cpu_possible_map
  */
 extern void smp_init_cpus(void);
 
+/*
+ * Move global data into per-processor storage.
+ */
+extern void smp_store_cpu_info(unsigned int cpuid);
 
 /*
  * Raise an IPI cross call on CPUs in callmap.
  */
-extern void smp_cross_call(const struct cpumask *mask, int ipi);
+extern void smp_cross_call(const struct cpumask *mask);
+
+/*
+ * Broadcast a clock event to other CPUs.
+ */
+extern void smp_timer_broadcast(const struct cpumask *mask);
 
 /*
  * Boot a secondary CPU, and assign it the specified idle task.
@@ -69,11 +78,6 @@ asmlinkage void secondary_start_kernel(void);
 extern void platform_secondary_init(unsigned int cpu);
 
 /*
- * Initialize cpu_possible map, and enable coherency
- */
-extern void platform_smp_prepare_cpus(unsigned int);
-
-/*
  * Initial data for bringing up a secondary CPU.
  */
 struct secondary_data {
@@ -83,7 +87,7 @@ struct secondary_data {
 extern struct secondary_data secondary_data;
 
 extern int __cpu_disable(void);
-extern int platform_cpu_disable(unsigned int cpu);
+extern int mach_cpu_disable(unsigned int cpu);
 
 extern void __cpu_die(unsigned int cpu);
 extern void cpu_die(void);
@@ -94,10 +98,46 @@ extern void platform_cpu_enable(unsigned int cpu);
 
 extern void arch_send_call_function_single_ipi(int cpu);
 extern void arch_send_call_function_ipi_mask(const struct cpumask *mask);
+#define arch_send_call_function_ipi_mask arch_send_call_function_ipi_mask
+
+/*
+ * Local timer interrupt handling function (can be IPI'ed).
+ */
+extern void local_timer_interrupt(void);
+
+#ifdef CONFIG_LOCAL_TIMERS
+
+/*
+ * Stop a local timer interrupt.
+ */
+extern void local_timer_stop(void);
+
+/*
+ * Platform provides this to acknowledge a local timer IRQ
+ */
+extern int local_timer_ack(void);
+
+#else
+
+static inline void local_timer_stop(void)
+{
+}
+
+#endif
+
+/*
+ * Setup a local timer interrupt for a CPU.
+ */
+extern void local_timer_setup(void);
 
 /*
  * show local interrupt info
  */
-extern void show_local_irqs(struct seq_file *, int);
+extern void show_local_irqs(struct seq_file *);
+
+/*
+ * Called from assembly, this is the local timer IRQ handler
+ */
+asmlinkage void do_local_timer(struct pt_regs *);
 
 #endif /* ifndef __ASM_ARM_SMP_H */

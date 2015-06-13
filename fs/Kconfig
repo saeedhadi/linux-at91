@@ -30,49 +30,37 @@ config FS_MBCACHE
 source "fs/reiserfs/Kconfig"
 source "fs/jfs/Kconfig"
 
-source "fs/xfs/Kconfig"
-source "fs/gfs2/Kconfig"
-source "fs/ocfs2/Kconfig"
-source "fs/btrfs/Kconfig"
-source "fs/nilfs2/Kconfig"
-
-endif # BLOCK
-
-# Posix ACL utility routines
-#
-# Note: Posix ACLs can be implemented without these helpers.  Never use
-# this symbol for ifdefs in core code.
-#
 config FS_POSIX_ACL
-	def_bool n
-
-config EXPORTFS
+# Posix ACL utility routines (for now, only ext2/ext3/jfs/reiserfs/nfs4)
+#
+# NOTE: you can implement Posix ACLs without these helpers (XFS does).
+# 	Never use this symbol for ifdefs.
+#
 	bool
+	default n
 
 config FILE_LOCKING
-	bool "Enable POSIX file locking API" if EXPERT
+	bool "Enable POSIX file locking API" if EMBEDDED
 	default y
 	help
 	  This option enables standard file locking support, required
           for filesystems like NFS and for the flock() system
           call. Disabling this option saves about 11k.
 
+source "fs/xfs/Kconfig"
+source "fs/gfs2/Kconfig"
+source "fs/ocfs2/Kconfig"
+source "fs/btrfs/Kconfig"
+
+endif # BLOCK
+
 source "fs/notify/Kconfig"
 
 source "fs/quota/Kconfig"
 
+source "fs/autofs/Kconfig"
 source "fs/autofs4/Kconfig"
 source "fs/fuse/Kconfig"
-
-config CUSE
-	tristate "Character device in Userspace support"
-	depends on FUSE_FS
-	help
-	  This FUSE extension allows character devices to be
-	  implemented in userspace.
-
-	  If you want to develop or use userspace character device
-	  based on CUSE, answer Y or M.
 
 config GENERIC_ACL
 	bool
@@ -110,7 +98,6 @@ source "fs/sysfs/Kconfig"
 
 config TMPFS
 	bool "Virtual memory file system support (former shm fs)"
-	depends on SHMEM
 	help
 	  Tmpfs is a file system which keeps all files in virtual memory.
 
@@ -136,8 +123,8 @@ config TMPFS_POSIX_ACL
 
 config HUGETLBFS
 	bool "HugeTLB file system support"
-	depends on X86 || IA64 || SPARC64 || (S390 && 64BIT) || \
-		   SYS_SUPPORTS_HUGETLBFS || BROKEN
+	depends on X86 || IA64 || PPC64 || SPARC64 || (SUPERH && MMU) || \
+		   (S390 && 64BIT) || BROKEN
 	help
 	  hugetlbfs is a filesystem backing for HugeTLB pages, based on
 	  ramfs. For architectures that support it, say Y here and read
@@ -178,7 +165,6 @@ source "fs/efs/Kconfig"
 source "fs/jffs2/Kconfig"
 # UBIFS File system configuration
 source "fs/ubifs/Kconfig"
-source "fs/logfs/Kconfig"
 source "fs/cramfs/Kconfig"
 source "fs/squashfs/Kconfig"
 source "fs/freevxfs/Kconfig"
@@ -187,10 +173,35 @@ source "fs/omfs/Kconfig"
 source "fs/hpfs/Kconfig"
 source "fs/qnx4/Kconfig"
 source "fs/romfs/Kconfig"
-source "fs/pstore/Kconfig"
 source "fs/sysv/Kconfig"
 source "fs/ufs/Kconfig"
 source "fs/exofs/Kconfig"
+
+config NILFS2_FS
+	tristate "NILFS2 file system support (EXPERIMENTAL)"
+	depends on BLOCK && EXPERIMENTAL
+	select CRC32
+	help
+	  NILFS2 is a log-structured file system (LFS) supporting continuous
+	  snapshotting.  In addition to versioning capability of the entire
+	  file system, users can even restore files mistakenly overwritten or
+	  destroyed just a few seconds ago.  Since this file system can keep
+	  consistency like conventional LFS, it achieves quick recovery after
+	  system crashes.
+
+	  NILFS2 creates a number of checkpoints every few seconds or per
+	  synchronous write basis (unless there is no change).  Users can
+	  select significant versions among continuously created checkpoints,
+	  and can change them into snapshots which will be preserved for long
+	  periods until they are changed back to checkpoints.  Each
+	  snapshot is mountable as a read-only file system concurrently with
+	  its writable mount, and this feature is convenient for online backup.
+
+	  Some features including atime, extended attributes, and POSIX ACLs,
+	  are not supported yet.
+
+	  To compile this file system support as a module, choose M here: the
+	  module will be called nilfs2.  If unsure, say N.
 
 endif # MISC_FILESYSTEMS
 
@@ -215,13 +226,14 @@ source "fs/nfsd/Kconfig"
 
 config LOCKD
 	tristate
-	depends on FILE_LOCKING
 
 config LOCKD_V4
 	bool
 	depends on NFSD_V3 || NFS_V3
-	depends on FILE_LOCKING
 	default y
+
+config EXPORTFS
+	tristate
 
 config NFS_ACL_SUPPORT
 	tristate
@@ -233,7 +245,7 @@ config NFS_COMMON
 	default y
 
 source "net/sunrpc/Kconfig"
-source "fs/ceph/Kconfig"
+source "fs/smbfs/Kconfig"
 source "fs/cifs/Kconfig"
 source "fs/ncpfs/Kconfig"
 source "fs/coda/Kconfig"

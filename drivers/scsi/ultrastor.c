@@ -138,7 +138,6 @@
 #include <linux/spinlock.h>
 #include <linux/stat.h>
 #include <linux/bitops.h>
-#include <linux/delay.h>
 
 #include <asm/io.h>
 #include <asm/system.h>
@@ -701,7 +700,7 @@ static inline void build_sg_list(struct mscp *mscp, struct scsi_cmnd *SCpnt)
 	mscp->transfer_data_length = transfer_length;
 }
 
-static int ultrastor_queuecommand_lck(struct scsi_cmnd *SCpnt,
+static int ultrastor_queuecommand(struct scsi_cmnd *SCpnt,
 				void (*done) (struct scsi_cmnd *))
 {
     struct mscp *my_mscp;
@@ -825,8 +824,6 @@ retry:
 
     return 0;
 }
-
-static DEF_SCSI_QCMD(ultrastor_queuecommand)
 
 /* This code must deal with 2 cases:
 

@@ -23,12 +23,10 @@
 
 #include <linux/hid.h>
 #include <linux/input.h>
-#include <linux/slab.h>
 #include <linux/usb.h>
 
 #include "hid-ids.h"
 
-#ifdef CONFIG_ZEROPLUS_FF
 #include "usbhid/usbhid.h"
 
 struct zpff_device {
@@ -75,14 +73,14 @@ static int zpff_init(struct hid_device *hid)
 	int error;
 
 	if (list_empty(report_list)) {
-		hid_err(hid, "no output report found\n");
+		dev_err(&hid->dev, "no output report found\n");
 		return -ENODEV;
 	}
 
 	report = list_entry(report_list->next, struct hid_report, list);
 
 	if (report->maxfield < 4) {
-		hid_err(hid, "not enough fields in report\n");
+		dev_err(&hid->dev, "not enough fields in report\n");
 		return -ENODEV;
 	}
 
@@ -105,16 +103,11 @@ static int zpff_init(struct hid_device *hid)
 	zpff->report->field[3]->value[0] = 0x00;
 	usbhid_submit_report(hid, zpff->report, USB_DIR_OUT);
 
-	hid_info(hid, "force feedback for Zeroplus based devices by Anssi Hannula <anssi.hannula@gmail.com>\n");
+	dev_info(&hid->dev, "force feedback for Zeroplus based devices by "
+	       "Anssi Hannula <anssi.hannula@gmail.com>\n");
 
 	return 0;
 }
-#else
-static inline int zpff_init(struct hid_device *hid)
-{
-	return 0;
-}
-#endif
 
 static int zp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 {
@@ -122,13 +115,13 @@ static int zp_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 	ret = hid_parse(hdev);
 	if (ret) {
-		hid_err(hdev, "parse failed\n");
+		dev_err(&hdev->dev, "parse failed\n");
 		goto err;
 	}
 
 	ret = hid_hw_start(hdev, HID_CONNECT_DEFAULT & ~HID_CONNECT_FF);
 	if (ret) {
-		hid_err(hdev, "hw start failed\n");
+		dev_err(&hdev->dev, "hw start failed\n");
 		goto err;
 	}
 
@@ -152,12 +145,12 @@ static struct hid_driver zp_driver = {
 	.probe = zp_probe,
 };
 
-static int __init zp_init(void)
+static int zp_init(void)
 {
 	return hid_register_driver(&zp_driver);
 }
 
-static void __exit zp_exit(void)
+static void zp_exit(void)
 {
 	hid_unregister_driver(&zp_driver);
 }

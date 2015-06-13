@@ -55,9 +55,8 @@ static struct irqaction cayman_action_pci2 = {
 	.flags		= IRQF_DISABLED,
 };
 
-static void enable_cayman_irq(struct irq_data *data)
+static void enable_cayman_irq(unsigned int irq)
 {
-	unsigned int irq = data->irq;
 	unsigned long flags;
 	unsigned long mask;
 	unsigned int reg;
@@ -67,15 +66,14 @@ static void enable_cayman_irq(struct irq_data *data)
 	reg = EPLD_MASK_BASE + ((irq / 8) << 2);
 	bit = 1<<(irq % 8);
 	local_irq_save(flags);
-	mask = __raw_readl(reg);
+	mask = ctrl_inl(reg);
 	mask |= bit;
-	__raw_writel(mask, reg);
+	ctrl_outl(mask, reg);
 	local_irq_restore(flags);
 }
 
-static void disable_cayman_irq(struct irq_data *data)
+void disable_cayman_irq(unsigned int irq)
 {
-	unsigned int irq = data->irq;
 	unsigned long flags;
 	unsigned long mask;
 	unsigned int reg;
@@ -85,16 +83,22 @@ static void disable_cayman_irq(struct irq_data *data)
 	reg = EPLD_MASK_BASE + ((irq / 8) << 2);
 	bit = 1<<(irq % 8);
 	local_irq_save(flags);
-	mask = __raw_readl(reg);
+	mask = ctrl_inl(reg);
 	mask &= ~bit;
-	__raw_writel(mask, reg);
+	ctrl_outl(mask, reg);
 	local_irq_restore(flags);
+}
+
+static void ack_cayman_irq(unsigned int irq)
+{
+	disable_cayman_irq(irq);
 }
 
 struct irq_chip cayman_irq_type = {
 	.name		= "Cayman-IRQ",
-	.irq_unmask	= enable_cayman_irq,
-	.irq_mask	= disable_cayman_irq,
+	.unmask 	= enable_cayman_irq,
+	.mask		= disable_cayman_irq,
+	.mask_ack	= ack_cayman_irq,
 };
 
 int cayman_irq_demux(int evt)
@@ -105,8 +109,8 @@ int cayman_irq_demux(int evt)
 		unsigned long status;
 		int i;
 
-		status = __raw_readl(EPLD_STATUS_BASE) &
-			 __raw_readl(EPLD_MASK_BASE) & 0xff;
+		status = ctrl_inl(EPLD_STATUS_BASE) &
+			 ctrl_inl(EPLD_MASK_BASE) & 0xff;
 		if (status == 0) {
 			irq = -1;
 		} else {
@@ -122,8 +126,8 @@ int cayman_irq_demux(int evt)
 		unsigned long status;
 		int i;
 
-		status = __raw_readl(EPLD_STATUS_BASE + 3 * sizeof(u32)) &
-			 __raw_readl(EPLD_MASK_BASE + 3 * sizeof(u32)) & 0xff;
+		status = ctrl_inl(EPLD_STATUS_BASE + 3 * sizeof(u32)) &
+			 ctrl_inl(EPLD_MASK_BASE + 3 * sizeof(u32)) & 0xff;
 		if (status == 0) {
 			irq = -1;
 		} else {
@@ -138,19 +142,34 @@ int cayman_irq_demux(int evt)
 	return irq;
 }
 
+#if defined(CONFIG_PROC_FS) && defined(CONFIG_SYSCTL)
+int cayman_irq_describe(char* p, int irq)
+{
+	if (irq < NR_INTC_IRQS) {
+		return intc_irq_describe(p, irq);
+	} else if (irq < NR_INTC_IRQS + 8) {
+		return sprintf(p, "(SMSC %d)", irq - NR_INTC_IRQS);
+	} else if ((irq >= NR_INTC_IRQS + 24) && (irq < NR_INTC_IRQS + 32)) {
+		return sprintf(p, "(PCI2 %d)", irq - (NR_INTC_IRQS + 24));
+	}
+
+	return 0;
+}
+#endif
+
 void init_cayman_irq(void)
 {
 	int i;
 
-	epld_virt = (unsigned long)ioremap_nocache(EPLD_BASE, 1024);
+	epld_virt = onchip_remap(EPLD_BASE, 1024, "EPLD");
 	if (!epld_virt) {
 		printk(KERN_ERR "Cayman IRQ: Unable to remap EPLD\n");
 		return;
 	}
 
 	for (i = 0; i < NR_EXT_IRQS; i++) {
-		irq_set_chip_and_handler(START_EXT_IRQS + i,
-					 &cayman_irq_type, handle_level_irq);
+		set_irq_chip_and_handler(START_EXT_IRQS + i, &cayman_irq_type,
+					 handle_level_irq);
 	}
 
 	/* Setup the SMSC interrupt */

@@ -161,7 +161,7 @@ static int flat_apic_id_registered(void)
 
 static int flat_phys_pkg_id(int initial_apic_id, int index_msb)
 {
-	return initial_apic_id >> index_msb;
+	return hard_smp_processor_id() >> index_msb;
 }
 
 struct apic apic_flat =  {
@@ -185,6 +185,8 @@ struct apic apic_flat =  {
 	.ioapic_phys_id_map		= NULL,
 	.setup_apic_routing		= NULL,
 	.multi_timer_check		= NULL,
+	.apicid_to_node			= NULL,
+	.cpu_to_logical_apicid		= NULL,
 	.cpu_present_to_apicid		= default_cpu_present_to_apicid,
 	.apicid_to_cpu_present		= NULL,
 	.setup_portio_remap		= NULL,
@@ -221,7 +223,7 @@ struct apic apic_flat =  {
 };
 
 /*
- * Physflat mode is used when there are more than 8 CPUs on a system.
+ * Physflat mode is used when there are more than 8 CPUs on a AMD system.
  * We cannot use logical delivery in this case because the mask
  * overflows, so use physical mode.
  */
@@ -233,14 +235,9 @@ static int physflat_acpi_madt_oem_check(char *oem_id, char *oem_table_id)
 	 * regardless of how many processors are present (x86_64 ES7000
 	 * is an example).
 	 */
-	if (acpi_gbl_FADT.header.revision >= FADT2_REVISION_ID &&
+	if (acpi_gbl_FADT.header.revision > FADT2_REVISION_ID &&
 		(acpi_gbl_FADT.flags & ACPI_FADT_APIC_PHYSICAL)) {
 		printk(KERN_DEBUG "system APIC only can use physical flat");
-		return 1;
-	}
-
-	if (!strncmp(oem_id, "IBM", 3) && !strncmp(oem_table_id, "EXA", 3)) {
-		printk(KERN_DEBUG "IBM Summit detected, will use apic physical");
 		return 1;
 	}
 #endif
@@ -309,7 +306,10 @@ physflat_cpu_mask_to_apicid_and(const struct cpumask *cpumask,
 		if (cpumask_test_cpu(cpu, cpu_online_mask))
 			break;
 	}
-	return per_cpu(x86_cpu_to_apicid, cpu);
+	if (cpu < nr_cpu_ids)
+		return per_cpu(x86_cpu_to_apicid, cpu);
+
+	return BAD_APICID;
 }
 
 struct apic apic_physflat =  {
@@ -335,6 +335,8 @@ struct apic apic_physflat =  {
 	.ioapic_phys_id_map		= NULL,
 	.setup_apic_routing		= NULL,
 	.multi_timer_check		= NULL,
+	.apicid_to_node			= NULL,
+	.cpu_to_logical_apicid		= NULL,
 	.cpu_present_to_apicid		= default_cpu_present_to_apicid,
 	.apicid_to_cpu_present		= NULL,
 	.setup_portio_remap		= NULL,

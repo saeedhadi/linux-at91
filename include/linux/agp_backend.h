@@ -53,7 +53,7 @@ struct agp_kern_info {
 	int current_memory;
 	bool cant_use_aperture;
 	unsigned long page_mask;
-	const struct vm_operations_struct *vm_ops;
+	struct vm_operations_struct *vm_ops;
 };
 
 /*
@@ -70,7 +70,7 @@ struct agp_memory {
 	struct agp_memory *next;
 	struct agp_memory *prev;
 	struct agp_bridge_data *bridge;
-	struct page **pages;
+	unsigned long *memory;
 	size_t page_count;
 	int key;
 	int num_scratch_pages;
@@ -79,11 +79,9 @@ struct agp_memory {
 	u32 physical;
 	bool is_bound;
 	bool is_flushed;
+        bool vmalloc_flag;
 	/* list of agp_memory mapped to the aperture */
 	struct list_head mapped_list;
-	/* DMA-mapped addresses */
-	struct scatterlist *sg_list;
-	int num_sg;
 };
 
 #define AGP_NORMAL_MEMORY 0
@@ -102,8 +100,10 @@ extern struct agp_memory *agp_allocate_memory(struct agp_bridge_data *, size_t, 
 extern int agp_copy_info(struct agp_bridge_data *, struct agp_kern_info *);
 extern int agp_bind_memory(struct agp_memory *, off_t);
 extern int agp_unbind_memory(struct agp_memory *);
+extern int agp_rebind_memory(void);
 extern void agp_enable(struct agp_bridge_data *, u32);
 extern struct agp_bridge_data *agp_backend_acquire(struct pci_dev *);
 extern void agp_backend_release(struct agp_bridge_data *);
+extern void agp_flush_chipset(struct agp_bridge_data *);
 
 #endif				/* _AGP_BACKEND_H */

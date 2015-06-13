@@ -40,7 +40,7 @@ static inline void ehci_qtd_init(struct ehci_hcd *ehci, struct ehci_qtd *qtd,
 {
 	memset (qtd, 0, sizeof *qtd);
 	qtd->qtd_dma = dma;
-	qtd->hw_token = cpu_to_hc32(ehci, QTD_STS_HALT);
+	qtd->hw_token = cpu_to_le32 (QTD_STS_HALT);
 	qtd->hw_next = EHCI_LIST_END(ehci);
 	qtd->hw_alt_next = EHCI_LIST_END(ehci);
 	INIT_LIST_HEAD (&qtd->qtd_list);
@@ -75,8 +75,7 @@ static void qh_destroy(struct ehci_qh *qh)
 	}
 	if (qh->dummy)
 		ehci_qtd_free (ehci, qh->dummy);
-	dma_pool_free(ehci->qh_pool, qh->hw, qh->qh_dma);
-	kfree(qh);
+	dma_pool_free (ehci->qh_pool, qh, qh->qh_dma);
 }
 
 static struct ehci_qh *ehci_qh_alloc (struct ehci_hcd *ehci, gfp_t flags)
@@ -84,14 +83,12 @@ static struct ehci_qh *ehci_qh_alloc (struct ehci_hcd *ehci, gfp_t flags)
 	struct ehci_qh		*qh;
 	dma_addr_t		dma;
 
-	qh = kzalloc(sizeof *qh, GFP_ATOMIC);
+	qh = (struct ehci_qh *)
+		dma_pool_alloc (ehci->qh_pool, flags, &dma);
 	if (!qh)
-		goto done;
-	qh->hw = (struct ehci_qh_hw *)
-		dma_pool_alloc(ehci->qh_pool, flags, &dma);
-	if (!qh->hw)
-		goto fail;
-	memset(qh->hw, 0, sizeof *qh->hw);
+		return qh;
+
+	memset (qh, 0, sizeof *qh);
 	qh->refcount = 1;
 	qh->ehci = ehci;
 	qh->qh_dma = dma;
@@ -102,15 +99,10 @@ static struct ehci_qh *ehci_qh_alloc (struct ehci_hcd *ehci, gfp_t flags)
 	qh->dummy = ehci_qtd_alloc (ehci, flags);
 	if (qh->dummy == NULL) {
 		ehci_dbg (ehci, "no dummy td\n");
-		goto fail1;
+		dma_pool_free (ehci->qh_pool, qh, qh->qh_dma);
+		qh = NULL;
 	}
-done:
 	return qh;
-fail1:
-	dma_pool_free(ehci->qh_pool, qh->hw, qh->qh_dma);
-fail:
-	kfree(qh);
-	return NULL;
 }
 
 /* to share a qh (cpu threads, or hc) */
@@ -136,14 +128,10 @@ static inline void qh_put (struct ehci_qh *qh)
 
 static void ehci_mem_cleanup (struct ehci_hcd *ehci)
 {
-	free_cached_lists(ehci);
+	free_cached_itd_list(ehci);
 	if (ehci->async)
 		qh_put (ehci->async);
 	ehci->async = NULL;
-
-	if (ehci->dummy)
-		qh_put(ehci->dummy);
-	ehci->dummy = NULL;
 
 	/* DMA consistent memory and pools */
 	if (ehci->qtd_pool)
@@ -192,7 +180,7 @@ static int ehci_mem_init (struct ehci_hcd *ehci, gfp_t flags)
 	/* QHs for control/bulk/intr transfers */
 	ehci->qh_pool = dma_pool_create ("ehci_qh",
 			ehci_to_hcd(ehci)->self.controller,
-			sizeof(struct ehci_qh_hw),
+			sizeof (struct ehci_qh),
 			32 /* byte alignment (for hw parts) */,
 			4096 /* can't cross 4K */);
 	if (!ehci->qh_pool) {
@@ -231,26 +219,8 @@ static int ehci_mem_init (struct ehci_hcd *ehci, gfp_t flags)
 	if (ehci->periodic == NULL) {
 		goto fail;
 	}
-
-	if (ehci->use_dummy_qh) {
-		struct ehci_qh_hw	*hw;
-		ehci->dummy = ehci_qh_alloc(ehci, flags);
-		if (!ehci->dummy)
-			goto fail;
-
-		hw = ehci->dummy->hw;
-		hw->hw_next = EHCI_LIST_END(ehci);
-		hw->hw_qtd_next = EHCI_LIST_END(ehci);
-		hw->hw_alt_next = EHCI_LIST_END(ehci);
-		hw->hw_token &= ~QTD_STS_ACTIVE;
-		ehci->dummy->hw = hw;
-
-		for (i = 0; i < ehci->periodic_size; i++)
-			ehci->periodic[i] = ehci->dummy->qh_dma;
-	} else {
-		for (i = 0; i < ehci->periodic_size; i++)
-			ehci->periodic[i] = EHCI_LIST_END(ehci);
-	}
+	for (i = 0; i < ehci->periodic_size; i++)
+		ehci->periodic [i] = EHCI_LIST_END(ehci);
 
 	/* software shadow of hardware table */
 	ehci->pshadow = kcalloc(ehci->periodic_size, sizeof(void *), flags);

@@ -8,12 +8,12 @@
 #include <linux/mm.h>
 #include <linux/utsname.h>
 #include <linux/mman.h>
+#include <linux/smp_lock.h>
 #include <linux/notifier.h>
 #include <linux/reboot.h>
 #include <linux/prctl.h>
 #include <linux/highuid.h>
 #include <linux/fs.h>
-#include <linux/perf_event.h>
 #include <linux/resource.h>
 #include <linux/kernel.h>
 #include <linux/kexec.h>
@@ -33,18 +33,13 @@
 #include <linux/task_io_accounting_ops.h>
 #include <linux/seccomp.h>
 #include <linux/cpu.h>
-#include <linux/personality.h>
 #include <linux/ptrace.h>
 #include <linux/fs_struct.h>
-#include <linux/gfp.h>
-#include <linux/syscore_ops.h>
 
 #include <linux/compat.h>
 #include <linux/syscalls.h>
 #include <linux/kprobes.h>
 #include <linux/user_namespace.h>
-
-#include <linux/kmsg_dump.h>
 
 #include <asm/uaccess.h>
 #include <asm/io.h>
@@ -120,33 +115,16 @@ EXPORT_SYMBOL(cad_pid);
 void (*pm_power_off_prepare)(void);
 
 /*
- * Returns true if current's euid is same as p's uid or euid,
- * or has CAP_SYS_NICE to p's user_ns.
- *
- * Called with rcu_read_lock, creds are safe
- */
-static bool set_one_prio_perm(struct task_struct *p)
-{
-	const struct cred *cred = current_cred(), *pcred = __task_cred(p);
-
-	if (pcred->user->user_ns == cred->user->user_ns &&
-	    (pcred->uid  == cred->euid ||
-	     pcred->euid == cred->euid))
-		return true;
-	if (ns_capable(pcred->user->user_ns, CAP_SYS_NICE))
-		return true;
-	return false;
-}
-
-/*
  * set the priority of a task
  * - the caller must hold the RCU read lock
  */
 static int set_one_prio(struct task_struct *p, int niceval, int error)
 {
+	const struct cred *cred = current_cred(), *pcred = __task_cred(p);
 	int no_nice;
 
-	if (!set_one_prio_perm(p)) {
+	if (pcred->uid  != cred->euid &&
+	    pcred->euid != cred->euid && !capable(CAP_SYS_NICE)) {
 		error = -EPERM;
 		goto out;
 	}
@@ -184,7 +162,6 @@ SYSCALL_DEFINE3(setpriority, int, which, int, who, int, niceval)
 	if (niceval > 19)
 		niceval = 19;
 
-	rcu_read_lock();
 	read_lock(&tasklist_lock);
 	switch (which) {
 		case PRIO_PROCESS:
@@ -212,17 +189,16 @@ SYSCALL_DEFINE3(setpriority, int, which, int, who, int, niceval)
 				 !(user = find_user(who)))
 				goto out_unlock;	/* No processes for this user */
 
-			do_each_thread(g, p) {
+			do_each_thread(g, p)
 				if (__task_cred(p)->uid == who)
 					error = set_one_prio(p, niceval, error);
-			} while_each_thread(g, p);
+			while_each_thread(g, p);
 			if (who != cred->uid)
 				free_uid(user);		/* For find_user() */
 			break;
 	}
 out_unlock:
 	read_unlock(&tasklist_lock);
-	rcu_read_unlock();
 out:
 	return error;
 }
@@ -244,7 +220,6 @@ SYSCALL_DEFINE2(getpriority, int, which, int, who)
 	if (which > PRIO_USER || which < PRIO_PROCESS)
 		return -EINVAL;
 
-	rcu_read_lock();
 	read_lock(&tasklist_lock);
 	switch (which) {
 		case PRIO_PROCESS:
@@ -277,20 +252,19 @@ SYSCALL_DEFINE2(getpriority, int, which, int, who)
 				 !(user = find_user(who)))
 				goto out_unlock;	/* No processes for this user */
 
-			do_each_thread(g, p) {
+			do_each_thread(g, p)
 				if (__task_cred(p)->uid == who) {
 					niceval = 20 - task_nice(p);
 					if (niceval > retval)
 						retval = niceval;
 				}
-			} while_each_thread(g, p);
+			while_each_thread(g, p);
 			if (who != cred->uid)
 				free_uid(user);		/* for find_user() */
 			break;
 	}
 out_unlock:
 	read_unlock(&tasklist_lock);
-	rcu_read_unlock();
 
 	return retval;
 }
@@ -305,7 +279,6 @@ out_unlock:
  */
 void emergency_restart(void)
 {
-	kmsg_dump(KMSG_DUMP_EMERG);
 	machine_emergency_restart();
 }
 EXPORT_SYMBOL_GPL(emergency_restart);
@@ -316,7 +289,6 @@ void kernel_restart_prepare(char *cmd)
 	system_state = SYSTEM_RESTART;
 	device_shutdown();
 	sysdev_shutdown();
-	syscore_shutdown();
 }
 
 /**
@@ -334,7 +306,6 @@ void kernel_restart(char *cmd)
 		printk(KERN_EMERG "Restarting system.\n");
 	else
 		printk(KERN_EMERG "Restarting system with command '%s'.\n", cmd);
-	kmsg_dump(KMSG_DUMP_RESTART);
 	machine_restart(cmd);
 }
 EXPORT_SYMBOL_GPL(kernel_restart);
@@ -355,9 +326,7 @@ void kernel_halt(void)
 {
 	kernel_shutdown_prepare(SYSTEM_HALT);
 	sysdev_shutdown();
-	syscore_shutdown();
 	printk(KERN_EMERG "System halted.\n");
-	kmsg_dump(KMSG_DUMP_HALT);
 	machine_halt();
 }
 
@@ -375,15 +344,10 @@ void kernel_power_off(void)
 		pm_power_off_prepare();
 	disable_nonboot_cpus();
 	sysdev_shutdown();
-	syscore_shutdown();
 	printk(KERN_EMERG "Power down.\n");
-	kmsg_dump(KMSG_DUMP_POWEROFF);
 	machine_power_off();
 }
 EXPORT_SYMBOL_GPL(kernel_power_off);
-
-static DEFINE_MUTEX(reboot_mutex);
-
 /*
  * Reboot system call: for obvious reasons only root may call it,
  * and even root needs to set up some magic numbers in the registers
@@ -416,7 +380,7 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 	if ((cmd == LINUX_REBOOT_CMD_POWER_OFF) && !pm_power_off)
 		cmd = LINUX_REBOOT_CMD_HALT;
 
-	mutex_lock(&reboot_mutex);
+	lock_kernel();
 	switch (cmd) {
 	case LINUX_REBOOT_CMD_RESTART:
 		kernel_restart(NULL);
@@ -432,18 +396,20 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 
 	case LINUX_REBOOT_CMD_HALT:
 		kernel_halt();
+		unlock_kernel();
 		do_exit(0);
 		panic("cannot halt");
 
 	case LINUX_REBOOT_CMD_POWER_OFF:
 		kernel_power_off();
+		unlock_kernel();
 		do_exit(0);
 		break;
 
 	case LINUX_REBOOT_CMD_RESTART2:
 		if (strncpy_from_user(&buffer[0], arg, sizeof(buffer) - 1) < 0) {
-			ret = -EFAULT;
-			break;
+			unlock_kernel();
+			return -EFAULT;
 		}
 		buffer[sizeof(buffer) - 1] = '\0';
 
@@ -466,7 +432,7 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 		ret = -EINVAL;
 		break;
 	}
-	mutex_unlock(&reboot_mutex);
+	unlock_kernel();
 	return ret;
 }
 
@@ -519,11 +485,15 @@ SYSCALL_DEFINE2(setregid, gid_t, rgid, gid_t, egid)
 		return -ENOMEM;
 	old = current_cred();
 
+	retval = security_task_setgid(rgid, egid, (gid_t)-1, LSM_SETID_RE);
+	if (retval)
+		goto error;
+
 	retval = -EPERM;
 	if (rgid != (gid_t) -1) {
 		if (old->gid == rgid ||
 		    old->egid == rgid ||
-		    nsown_capable(CAP_SETGID))
+		    capable(CAP_SETGID))
 			new->gid = rgid;
 		else
 			goto error;
@@ -532,7 +502,7 @@ SYSCALL_DEFINE2(setregid, gid_t, rgid, gid_t, egid)
 		if (old->gid == egid ||
 		    old->egid == egid ||
 		    old->sgid == egid ||
-		    nsown_capable(CAP_SETGID))
+		    capable(CAP_SETGID))
 			new->egid = egid;
 		else
 			goto error;
@@ -566,8 +536,12 @@ SYSCALL_DEFINE1(setgid, gid_t, gid)
 		return -ENOMEM;
 	old = current_cred();
 
+	retval = security_task_setgid(gid, (gid_t)-1, (gid_t)-1, LSM_SETID_ID);
+	if (retval)
+		goto error;
+
 	retval = -EPERM;
-	if (nsown_capable(CAP_SETGID))
+	if (capable(CAP_SETGID))
 		new->gid = new->egid = new->sgid = new->fsgid = gid;
 	else if (gid == old->gid || gid == old->sgid)
 		new->egid = new->fsgid = gid;
@@ -592,7 +566,13 @@ static int set_user(struct cred *new)
 	if (!new_user)
 		return -EAGAIN;
 
-	if (atomic_read(&new_user->processes) >= rlimit(RLIMIT_NPROC) &&
+	if (!task_can_switch_user(new_user, current)) {
+		free_uid(new_user);
+		return -EINVAL;
+	}
+
+	if (atomic_read(&new_user->processes) >=
+				current->signal->rlim[RLIMIT_NPROC].rlim_cur &&
 			new_user != INIT_USER) {
 		free_uid(new_user);
 		return -EAGAIN;
@@ -629,12 +609,16 @@ SYSCALL_DEFINE2(setreuid, uid_t, ruid, uid_t, euid)
 		return -ENOMEM;
 	old = current_cred();
 
+	retval = security_task_setuid(ruid, euid, (uid_t)-1, LSM_SETID_RE);
+	if (retval)
+		goto error;
+
 	retval = -EPERM;
 	if (ruid != (uid_t) -1) {
 		new->uid = ruid;
 		if (old->uid != ruid &&
 		    old->euid != ruid &&
-		    !nsown_capable(CAP_SETUID))
+		    !capable(CAP_SETUID))
 			goto error;
 	}
 
@@ -643,7 +627,7 @@ SYSCALL_DEFINE2(setreuid, uid_t, ruid, uid_t, euid)
 		if (old->uid != euid &&
 		    old->euid != euid &&
 		    old->suid != euid &&
-		    !nsown_capable(CAP_SETUID))
+		    !capable(CAP_SETUID))
 			goto error;
 	}
 
@@ -690,8 +674,12 @@ SYSCALL_DEFINE1(setuid, uid_t, uid)
 		return -ENOMEM;
 	old = current_cred();
 
+	retval = security_task_setuid(uid, (uid_t)-1, (uid_t)-1, LSM_SETID_ID);
+	if (retval)
+		goto error;
+
 	retval = -EPERM;
-	if (nsown_capable(CAP_SETUID)) {
+	if (capable(CAP_SETUID)) {
 		new->suid = new->uid = uid;
 		if (uid != old->uid) {
 			retval = set_user(new);
@@ -730,10 +718,13 @@ SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)
 	if (!new)
 		return -ENOMEM;
 
+	retval = security_task_setuid(ruid, euid, suid, LSM_SETID_RES);
+	if (retval)
+		goto error;
 	old = current_cred();
 
 	retval = -EPERM;
-	if (!nsown_capable(CAP_SETUID)) {
+	if (!capable(CAP_SETUID)) {
 		if (ruid != (uid_t) -1 && ruid != old->uid &&
 		    ruid != old->euid  && ruid != old->suid)
 			goto error;
@@ -796,8 +787,12 @@ SYSCALL_DEFINE3(setresgid, gid_t, rgid, gid_t, egid, gid_t, sgid)
 		return -ENOMEM;
 	old = current_cred();
 
+	retval = security_task_setgid(rgid, egid, sgid, LSM_SETID_RES);
+	if (retval)
+		goto error;
+
 	retval = -EPERM;
-	if (!nsown_capable(CAP_SETGID)) {
+	if (!capable(CAP_SETGID)) {
 		if (rgid != (gid_t) -1 && rgid != old->gid &&
 		    rgid != old->egid  && rgid != old->sgid)
 			goto error;
@@ -855,9 +850,12 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
 	old = current_cred();
 	old_fsuid = old->fsuid;
 
+	if (security_task_setuid(uid, (uid_t)-1, (uid_t)-1, LSM_SETID_FS) < 0)
+		goto error;
+
 	if (uid == old->uid  || uid == old->euid  ||
 	    uid == old->suid || uid == old->fsuid ||
-	    nsown_capable(CAP_SETUID)) {
+	    capable(CAP_SETUID)) {
 		if (uid != old_fsuid) {
 			new->fsuid = uid;
 			if (security_task_fix_setuid(new, old, LSM_SETID_FS) == 0)
@@ -865,6 +863,7 @@ SYSCALL_DEFINE1(setfsuid, uid_t, uid)
 		}
 	}
 
+error:
 	abort_creds(new);
 	return old_fsuid;
 
@@ -888,15 +887,19 @@ SYSCALL_DEFINE1(setfsgid, gid_t, gid)
 	old = current_cred();
 	old_fsgid = old->fsgid;
 
+	if (security_task_setgid(gid, (gid_t)-1, (gid_t)-1, LSM_SETID_FS))
+		goto error;
+
 	if (gid == old->gid  || gid == old->egid  ||
 	    gid == old->sgid || gid == old->fsgid ||
-	    nsown_capable(CAP_SETGID)) {
+	    capable(CAP_SETGID)) {
 		if (gid != old_fsgid) {
 			new->fsgid = gid;
 			goto change_okay;
 		}
 	}
 
+error:
 	abort_creds(new);
 	return old_fsgid;
 
@@ -907,15 +910,16 @@ change_okay:
 
 void do_sys_times(struct tms *tms)
 {
-	cputime_t tgutime, tgstime, cutime, cstime;
+	struct task_cputime cputime;
+	cputime_t cutime, cstime;
 
+	thread_group_cputime(current, &cputime);
 	spin_lock_irq(&current->sighand->siglock);
-	thread_group_times(current, &tgutime, &tgstime);
 	cutime = current->signal->cutime;
 	cstime = current->signal->cstime;
 	spin_unlock_irq(&current->sighand->siglock);
-	tms->tms_utime = cputime_to_clock_t(tgutime);
-	tms->tms_stime = cputime_to_clock_t(tgstime);
+	tms->tms_utime = cputime_to_clock_t(cputime.utime);
+	tms->tms_stime = cputime_to_clock_t(cputime.stime);
 	tms->tms_cutime = cputime_to_clock_t(cutime);
 	tms->tms_cstime = cputime_to_clock_t(cstime);
 }
@@ -958,7 +962,6 @@ SYSCALL_DEFINE2(setpgid, pid_t, pid, pid_t, pgid)
 		pgid = pid;
 	if (pgid < 0)
 		return -EINVAL;
-	rcu_read_lock();
 
 	/* From this point forward we keep holding onto the tasklist lock
 	 * so that our parent does not change from under us. -DaveM
@@ -1012,7 +1015,6 @@ SYSCALL_DEFINE2(setpgid, pid_t, pid, pid_t, pgid)
 out:
 	/* All paths lead to here, thus we are safe. -DaveM */
 	write_unlock_irq(&tasklist_lock);
-	rcu_read_unlock();
 	return err;
 }
 
@@ -1107,23 +1109,293 @@ SYSCALL_DEFINE0(setsid)
 	err = session;
 out:
 	write_unlock_irq(&tasklist_lock);
-	if (err > 0) {
-		proc_sid_connector(group_leader);
-		sched_autogroup_create_attach(group_leader);
-	}
 	return err;
 }
 
-DECLARE_RWSEM(uts_sem);
+/*
+ * Supplementary group IDs
+ */
 
-#ifdef COMPAT_UTS_MACHINE
-#define override_architecture(name) \
-	(personality(current->personality) == PER_LINUX32 && \
-	 copy_to_user(name->machine, COMPAT_UTS_MACHINE, \
-		      sizeof(COMPAT_UTS_MACHINE)))
-#else
-#define override_architecture(name)	0
-#endif
+/* init to 2 - one for init_task, one to ensure it is never freed */
+struct group_info init_groups = { .usage = ATOMIC_INIT(2) };
+
+struct group_info *groups_alloc(int gidsetsize)
+{
+	struct group_info *group_info;
+	int nblocks;
+	int i;
+
+	nblocks = (gidsetsize + NGROUPS_PER_BLOCK - 1) / NGROUPS_PER_BLOCK;
+	/* Make sure we always allocate at least one indirect block pointer */
+	nblocks = nblocks ? : 1;
+	group_info = kmalloc(sizeof(*group_info) + nblocks*sizeof(gid_t *), GFP_USER);
+	if (!group_info)
+		return NULL;
+	group_info->ngroups = gidsetsize;
+	group_info->nblocks = nblocks;
+	atomic_set(&group_info->usage, 1);
+
+	if (gidsetsize <= NGROUPS_SMALL)
+		group_info->blocks[0] = group_info->small_block;
+	else {
+		for (i = 0; i < nblocks; i++) {
+			gid_t *b;
+			b = (void *)__get_free_page(GFP_USER);
+			if (!b)
+				goto out_undo_partial_alloc;
+			group_info->blocks[i] = b;
+		}
+	}
+	return group_info;
+
+out_undo_partial_alloc:
+	while (--i >= 0) {
+		free_page((unsigned long)group_info->blocks[i]);
+	}
+	kfree(group_info);
+	return NULL;
+}
+
+EXPORT_SYMBOL(groups_alloc);
+
+void groups_free(struct group_info *group_info)
+{
+	if (group_info->blocks[0] != group_info->small_block) {
+		int i;
+		for (i = 0; i < group_info->nblocks; i++)
+			free_page((unsigned long)group_info->blocks[i]);
+	}
+	kfree(group_info);
+}
+
+EXPORT_SYMBOL(groups_free);
+
+/* export the group_info to a user-space array */
+static int groups_to_user(gid_t __user *grouplist,
+			  const struct group_info *group_info)
+{
+	int i;
+	unsigned int count = group_info->ngroups;
+
+	for (i = 0; i < group_info->nblocks; i++) {
+		unsigned int cp_count = min(NGROUPS_PER_BLOCK, count);
+		unsigned int len = cp_count * sizeof(*grouplist);
+
+		if (copy_to_user(grouplist, group_info->blocks[i], len))
+			return -EFAULT;
+
+		grouplist += NGROUPS_PER_BLOCK;
+		count -= cp_count;
+	}
+	return 0;
+}
+
+/* fill a group_info from a user-space array - it must be allocated already */
+static int groups_from_user(struct group_info *group_info,
+    gid_t __user *grouplist)
+{
+	int i;
+	unsigned int count = group_info->ngroups;
+
+	for (i = 0; i < group_info->nblocks; i++) {
+		unsigned int cp_count = min(NGROUPS_PER_BLOCK, count);
+		unsigned int len = cp_count * sizeof(*grouplist);
+
+		if (copy_from_user(group_info->blocks[i], grouplist, len))
+			return -EFAULT;
+
+		grouplist += NGROUPS_PER_BLOCK;
+		count -= cp_count;
+	}
+	return 0;
+}
+
+/* a simple Shell sort */
+static void groups_sort(struct group_info *group_info)
+{
+	int base, max, stride;
+	int gidsetsize = group_info->ngroups;
+
+	for (stride = 1; stride < gidsetsize; stride = 3 * stride + 1)
+		; /* nothing */
+	stride /= 3;
+
+	while (stride) {
+		max = gidsetsize - stride;
+		for (base = 0; base < max; base++) {
+			int left = base;
+			int right = left + stride;
+			gid_t tmp = GROUP_AT(group_info, right);
+
+			while (left >= 0 && GROUP_AT(group_info, left) > tmp) {
+				GROUP_AT(group_info, right) =
+				    GROUP_AT(group_info, left);
+				right = left;
+				left -= stride;
+			}
+			GROUP_AT(group_info, right) = tmp;
+		}
+		stride /= 3;
+	}
+}
+
+/* a simple bsearch */
+int groups_search(const struct group_info *group_info, gid_t grp)
+{
+	unsigned int left, right;
+
+	if (!group_info)
+		return 0;
+
+	left = 0;
+	right = group_info->ngroups;
+	while (left < right) {
+		unsigned int mid = (left+right)/2;
+		int cmp = grp - GROUP_AT(group_info, mid);
+		if (cmp > 0)
+			left = mid + 1;
+		else if (cmp < 0)
+			right = mid;
+		else
+			return 1;
+	}
+	return 0;
+}
+
+/**
+ * set_groups - Change a group subscription in a set of credentials
+ * @new: The newly prepared set of credentials to alter
+ * @group_info: The group list to install
+ *
+ * Validate a group subscription and, if valid, insert it into a set
+ * of credentials.
+ */
+int set_groups(struct cred *new, struct group_info *group_info)
+{
+	int retval;
+
+	retval = security_task_setgroups(group_info);
+	if (retval)
+		return retval;
+
+	put_group_info(new->group_info);
+	groups_sort(group_info);
+	get_group_info(group_info);
+	new->group_info = group_info;
+	return 0;
+}
+
+EXPORT_SYMBOL(set_groups);
+
+/**
+ * set_current_groups - Change current's group subscription
+ * @group_info: The group list to impose
+ *
+ * Validate a group subscription and, if valid, impose it upon current's task
+ * security record.
+ */
+int set_current_groups(struct group_info *group_info)
+{
+	struct cred *new;
+	int ret;
+
+	new = prepare_creds();
+	if (!new)
+		return -ENOMEM;
+
+	ret = set_groups(new, group_info);
+	if (ret < 0) {
+		abort_creds(new);
+		return ret;
+	}
+
+	return commit_creds(new);
+}
+
+EXPORT_SYMBOL(set_current_groups);
+
+SYSCALL_DEFINE2(getgroups, int, gidsetsize, gid_t __user *, grouplist)
+{
+	const struct cred *cred = current_cred();
+	int i;
+
+	if (gidsetsize < 0)
+		return -EINVAL;
+
+	/* no need to grab task_lock here; it cannot change */
+	i = cred->group_info->ngroups;
+	if (gidsetsize) {
+		if (i > gidsetsize) {
+			i = -EINVAL;
+			goto out;
+		}
+		if (groups_to_user(grouplist, cred->group_info)) {
+			i = -EFAULT;
+			goto out;
+		}
+	}
+out:
+	return i;
+}
+
+/*
+ *	SMP: Our groups are copy-on-write. We can set them safely
+ *	without another task interfering.
+ */
+ 
+SYSCALL_DEFINE2(setgroups, int, gidsetsize, gid_t __user *, grouplist)
+{
+	struct group_info *group_info;
+	int retval;
+
+	if (!capable(CAP_SETGID))
+		return -EPERM;
+	if ((unsigned)gidsetsize > NGROUPS_MAX)
+		return -EINVAL;
+
+	group_info = groups_alloc(gidsetsize);
+	if (!group_info)
+		return -ENOMEM;
+	retval = groups_from_user(group_info, grouplist);
+	if (retval) {
+		put_group_info(group_info);
+		return retval;
+	}
+
+	retval = set_current_groups(group_info);
+	put_group_info(group_info);
+
+	return retval;
+}
+
+/*
+ * Check whether we're fsgid/egid or in the supplemental group..
+ */
+int in_group_p(gid_t grp)
+{
+	const struct cred *cred = current_cred();
+	int retval = 1;
+
+	if (grp != cred->fsgid)
+		retval = groups_search(cred->group_info, grp);
+	return retval;
+}
+
+EXPORT_SYMBOL(in_group_p);
+
+int in_egroup_p(gid_t grp)
+{
+	const struct cred *cred = current_cred();
+	int retval = 1;
+
+	if (grp != cred->egid)
+		retval = groups_search(cred->group_info, grp);
+	return retval;
+}
+
+EXPORT_SYMBOL(in_egroup_p);
+
+DECLARE_RWSEM(uts_sem);
 
 SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 {
@@ -1133,74 +1405,16 @@ SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 	if (copy_to_user(name, utsname(), sizeof *name))
 		errno = -EFAULT;
 	up_read(&uts_sem);
-
-	if (!errno && override_architecture(name))
-		errno = -EFAULT;
 	return errno;
 }
-
-#ifdef __ARCH_WANT_SYS_OLD_UNAME
-/*
- * Old cruft
- */
-SYSCALL_DEFINE1(uname, struct old_utsname __user *, name)
-{
-	int error = 0;
-
-	if (!name)
-		return -EFAULT;
-
-	down_read(&uts_sem);
-	if (copy_to_user(name, utsname(), sizeof(*name)))
-		error = -EFAULT;
-	up_read(&uts_sem);
-
-	if (!error && override_architecture(name))
-		error = -EFAULT;
-	return error;
-}
-
-SYSCALL_DEFINE1(olduname, struct oldold_utsname __user *, name)
-{
-	int error;
-
-	if (!name)
-		return -EFAULT;
-	if (!access_ok(VERIFY_WRITE, name, sizeof(struct oldold_utsname)))
-		return -EFAULT;
-
-	down_read(&uts_sem);
-	error = __copy_to_user(&name->sysname, &utsname()->sysname,
-			       __OLD_UTS_LEN);
-	error |= __put_user(0, name->sysname + __OLD_UTS_LEN);
-	error |= __copy_to_user(&name->nodename, &utsname()->nodename,
-				__OLD_UTS_LEN);
-	error |= __put_user(0, name->nodename + __OLD_UTS_LEN);
-	error |= __copy_to_user(&name->release, &utsname()->release,
-				__OLD_UTS_LEN);
-	error |= __put_user(0, name->release + __OLD_UTS_LEN);
-	error |= __copy_to_user(&name->version, &utsname()->version,
-				__OLD_UTS_LEN);
-	error |= __put_user(0, name->version + __OLD_UTS_LEN);
-	error |= __copy_to_user(&name->machine, &utsname()->machine,
-				__OLD_UTS_LEN);
-	error |= __put_user(0, name->machine + __OLD_UTS_LEN);
-	up_read(&uts_sem);
-
-	if (!error && override_architecture(name))
-		error = -EFAULT;
-	return error ? -EFAULT : 0;
-}
-#endif
 
 SYSCALL_DEFINE2(sethostname, char __user *, name, int, len)
 {
 	int errno;
 	char tmp[__NEW_UTS_LEN];
 
-	if (!ns_capable(current->nsproxy->uts_ns->user_ns, CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
-
 	if (len < 0 || len > __NEW_UTS_LEN)
 		return -EINVAL;
 	down_write(&uts_sem);
@@ -1248,7 +1462,7 @@ SYSCALL_DEFINE2(setdomainname, char __user *, name, int, len)
 	int errno;
 	char tmp[__NEW_UTS_LEN];
 
-	if (!ns_capable(current->nsproxy->uts_ns->user_ns, CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 	if (len < 0 || len > __NEW_UTS_LEN)
 		return -EINVAL;
@@ -1268,14 +1482,15 @@ SYSCALL_DEFINE2(setdomainname, char __user *, name, int, len)
 
 SYSCALL_DEFINE2(getrlimit, unsigned int, resource, struct rlimit __user *, rlim)
 {
-	struct rlimit value;
-	int ret;
-
-	ret = do_prlimit(current, resource, NULL, &value);
-	if (!ret)
-		ret = copy_to_user(rlim, &value, sizeof(*rlim)) ? -EFAULT : 0;
-
-	return ret;
+	if (resource >= RLIM_NLIMITS)
+		return -EINVAL;
+	else {
+		struct rlimit value;
+		task_lock(current->group_leader);
+		value = current->signal->rlim[resource];
+		task_unlock(current->group_leader);
+		return copy_to_user(rlim, &value, sizeof(*rlim)) ? -EFAULT : 0;
+	}
 }
 
 #ifdef __ARCH_WANT_SYS_OLD_GETRLIMIT
@@ -1303,91 +1518,44 @@ SYSCALL_DEFINE2(old_getrlimit, unsigned int, resource,
 
 #endif
 
-static inline bool rlim64_is_infinity(__u64 rlim64)
+SYSCALL_DEFINE2(setrlimit, unsigned int, resource, struct rlimit __user *, rlim)
 {
-#if BITS_PER_LONG < 64
-	return rlim64 >= ULONG_MAX;
-#else
-	return rlim64 == RLIM64_INFINITY;
-#endif
-}
-
-static void rlim_to_rlim64(const struct rlimit *rlim, struct rlimit64 *rlim64)
-{
-	if (rlim->rlim_cur == RLIM_INFINITY)
-		rlim64->rlim_cur = RLIM64_INFINITY;
-	else
-		rlim64->rlim_cur = rlim->rlim_cur;
-	if (rlim->rlim_max == RLIM_INFINITY)
-		rlim64->rlim_max = RLIM64_INFINITY;
-	else
-		rlim64->rlim_max = rlim->rlim_max;
-}
-
-static void rlim64_to_rlim(const struct rlimit64 *rlim64, struct rlimit *rlim)
-{
-	if (rlim64_is_infinity(rlim64->rlim_cur))
-		rlim->rlim_cur = RLIM_INFINITY;
-	else
-		rlim->rlim_cur = (unsigned long)rlim64->rlim_cur;
-	if (rlim64_is_infinity(rlim64->rlim_max))
-		rlim->rlim_max = RLIM_INFINITY;
-	else
-		rlim->rlim_max = (unsigned long)rlim64->rlim_max;
-}
-
-/* make sure you are allowed to change @tsk limits before calling this */
-int do_prlimit(struct task_struct *tsk, unsigned int resource,
-		struct rlimit *new_rlim, struct rlimit *old_rlim)
-{
-	struct rlimit *rlim;
-	int retval = 0;
+	struct rlimit new_rlim, *old_rlim;
+	int retval;
 
 	if (resource >= RLIM_NLIMITS)
 		return -EINVAL;
-	if (new_rlim) {
-		if (new_rlim->rlim_cur > new_rlim->rlim_max)
-			return -EINVAL;
-		if (resource == RLIMIT_NOFILE &&
-				new_rlim->rlim_max > sysctl_nr_open)
-			return -EPERM;
+	if (copy_from_user(&new_rlim, rlim, sizeof(*rlim)))
+		return -EFAULT;
+	if (new_rlim.rlim_cur > new_rlim.rlim_max)
+		return -EINVAL;
+	old_rlim = current->signal->rlim + resource;
+	if ((new_rlim.rlim_max > old_rlim->rlim_max) &&
+	    !capable(CAP_SYS_RESOURCE))
+		return -EPERM;
+	if (resource == RLIMIT_NOFILE && new_rlim.rlim_max > sysctl_nr_open)
+		return -EPERM;
+
+	retval = security_task_setrlimit(resource, &new_rlim);
+	if (retval)
+		return retval;
+
+	if (resource == RLIMIT_CPU && new_rlim.rlim_cur == 0) {
+		/*
+		 * The caller is asking for an immediate RLIMIT_CPU
+		 * expiry.  But we use the zero value to mean "it was
+		 * never set".  So let's cheat and make it one second
+		 * instead
+		 */
+		new_rlim.rlim_cur = 1;
 	}
 
-	/* protect tsk->signal and tsk->sighand from disappearing */
-	read_lock(&tasklist_lock);
-	if (!tsk->sighand) {
-		retval = -ESRCH;
+	task_lock(current->group_leader);
+	*old_rlim = new_rlim;
+	task_unlock(current->group_leader);
+
+	if (resource != RLIMIT_CPU)
 		goto out;
-	}
-
-	rlim = tsk->signal->rlim + resource;
-	task_lock(tsk->group_leader);
-	if (new_rlim) {
-		/* Keep the capable check against init_user_ns until
-		   cgroups can contain all limits */
-		if (new_rlim->rlim_max > rlim->rlim_max &&
-				!capable(CAP_SYS_RESOURCE))
-			retval = -EPERM;
-		if (!retval)
-			retval = security_task_setrlimit(tsk->group_leader,
-					resource, new_rlim);
-		if (resource == RLIMIT_CPU && new_rlim->rlim_cur == 0) {
-			/*
-			 * The caller is asking for an immediate RLIMIT_CPU
-			 * expiry.  But we use the zero value to mean "it was
-			 * never set".  So let's cheat and make it one second
-			 * instead
-			 */
-			new_rlim->rlim_cur = 1;
-		}
-	}
-	if (!retval) {
-		if (old_rlim)
-			*old_rlim = *rlim;
-		if (new_rlim)
-			*rlim = *new_rlim;
-	}
-	task_unlock(tsk->group_leader);
 
 	/*
 	 * RLIMIT_CPU handling.   Note that the kernel fails to return an error
@@ -1395,86 +1563,12 @@ int do_prlimit(struct task_struct *tsk, unsigned int resource,
 	 * very long-standing error, and fixing it now risks breakage of
 	 * applications, so we live with it
 	 */
-	 if (!retval && new_rlim && resource == RLIMIT_CPU &&
-			 new_rlim->rlim_cur != RLIM_INFINITY)
-		update_rlimit_cpu(tsk, new_rlim->rlim_cur);
+	if (new_rlim.rlim_cur == RLIM_INFINITY)
+		goto out;
+
+	update_rlimit_cpu(new_rlim.rlim_cur);
 out:
-	read_unlock(&tasklist_lock);
-	return retval;
-}
-
-/* rcu lock must be held */
-static int check_prlimit_permission(struct task_struct *task)
-{
-	const struct cred *cred = current_cred(), *tcred;
-
-	if (current == task)
-		return 0;
-
-	tcred = __task_cred(task);
-	if (cred->user->user_ns == tcred->user->user_ns &&
-	    (cred->uid == tcred->euid &&
-	     cred->uid == tcred->suid &&
-	     cred->uid == tcred->uid  &&
-	     cred->gid == tcred->egid &&
-	     cred->gid == tcred->sgid &&
-	     cred->gid == tcred->gid))
-		return 0;
-	if (ns_capable(tcred->user->user_ns, CAP_SYS_RESOURCE))
-		return 0;
-
-	return -EPERM;
-}
-
-SYSCALL_DEFINE4(prlimit64, pid_t, pid, unsigned int, resource,
-		const struct rlimit64 __user *, new_rlim,
-		struct rlimit64 __user *, old_rlim)
-{
-	struct rlimit64 old64, new64;
-	struct rlimit old, new;
-	struct task_struct *tsk;
-	int ret;
-
-	if (new_rlim) {
-		if (copy_from_user(&new64, new_rlim, sizeof(new64)))
-			return -EFAULT;
-		rlim64_to_rlim(&new64, &new);
-	}
-
-	rcu_read_lock();
-	tsk = pid ? find_task_by_vpid(pid) : current;
-	if (!tsk) {
-		rcu_read_unlock();
-		return -ESRCH;
-	}
-	ret = check_prlimit_permission(tsk);
-	if (ret) {
-		rcu_read_unlock();
-		return ret;
-	}
-	get_task_struct(tsk);
-	rcu_read_unlock();
-
-	ret = do_prlimit(tsk, resource, new_rlim ? &new : NULL,
-			old_rlim ? &old : NULL);
-
-	if (!ret && old_rlim) {
-		rlim_to_rlim64(&old, &old64);
-		if (copy_to_user(old_rlim, &old64, sizeof(old64)))
-			ret = -EFAULT;
-	}
-
-	put_task_struct(tsk);
-	return ret;
-}
-
-SYSCALL_DEFINE2(setrlimit, unsigned int, resource, struct rlimit __user *, rlim)
-{
-	struct rlimit new_rlim;
-
-	if (copy_from_user(&new_rlim, rlim, sizeof(*rlim)))
-		return -EFAULT;
-	return do_prlimit(current, resource, &new_rlim, NULL);
+	return 0;
 }
 
 /*
@@ -1524,16 +1618,16 @@ static void k_getrusage(struct task_struct *p, int who, struct rusage *r)
 {
 	struct task_struct *t;
 	unsigned long flags;
-	cputime_t tgutime, tgstime, utime, stime;
-	unsigned long maxrss = 0;
+	cputime_t utime, stime;
+	struct task_cputime cputime;
 
 	memset((char *) r, 0, sizeof *r);
 	utime = stime = cputime_zero;
 
 	if (who == RUSAGE_THREAD) {
-		task_times(current, &utime, &stime);
+		utime = task_utime(current);
+		stime = task_stime(current);
 		accumulate_thread_rusage(p, r);
-		maxrss = p->signal->maxrss;
 		goto out;
 	}
 
@@ -1551,23 +1645,20 @@ static void k_getrusage(struct task_struct *p, int who, struct rusage *r)
 			r->ru_majflt = p->signal->cmaj_flt;
 			r->ru_inblock = p->signal->cinblock;
 			r->ru_oublock = p->signal->coublock;
-			maxrss = p->signal->cmaxrss;
 
 			if (who == RUSAGE_CHILDREN)
 				break;
 
 		case RUSAGE_SELF:
-			thread_group_times(p, &tgutime, &tgstime);
-			utime = cputime_add(utime, tgutime);
-			stime = cputime_add(stime, tgstime);
+			thread_group_cputime(p, &cputime);
+			utime = cputime_add(utime, cputime.utime);
+			stime = cputime_add(stime, cputime.stime);
 			r->ru_nvcsw += p->signal->nvcsw;
 			r->ru_nivcsw += p->signal->nivcsw;
 			r->ru_minflt += p->signal->min_flt;
 			r->ru_majflt += p->signal->maj_flt;
 			r->ru_inblock += p->signal->inblock;
 			r->ru_oublock += p->signal->oublock;
-			if (maxrss < p->signal->maxrss)
-				maxrss = p->signal->maxrss;
 			t = p;
 			do {
 				accumulate_thread_rusage(t, r);
@@ -1583,15 +1674,6 @@ static void k_getrusage(struct task_struct *p, int who, struct rusage *r)
 out:
 	cputime_to_timeval(utime, &r->ru_utime);
 	cputime_to_timeval(stime, &r->ru_stime);
-
-	if (who != RUSAGE_CHILDREN) {
-		struct mm_struct *mm = get_task_mm(p);
-		if (mm) {
-			setmax_mm_hiwater_rss(&maxrss, mm);
-			mmput(mm);
-		}
-	}
-	r->ru_maxrss = maxrss * (PAGE_SIZE / 1024); /* convert pages to KBs */
 }
 
 int getrusage(struct task_struct *p, int who, struct rusage __user *ru)
@@ -1711,12 +1793,6 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 		case PR_SET_TSC:
 			error = SET_TSC_CTL(arg2);
 			break;
-		case PR_TASK_PERF_EVENTS_DISABLE:
-			error = perf_event_task_disable();
-			break;
-		case PR_TASK_PERF_EVENTS_ENABLE:
-			error = perf_event_task_enable();
-			break;
 		case PR_GET_TIMERSLACK:
 			error = current->timer_slack_ns;
 			break;
@@ -1727,41 +1803,6 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 			else
 				current->timer_slack_ns = arg2;
 			error = 0;
-			break;
-		case PR_MCE_KILL:
-			if (arg4 | arg5)
-				return -EINVAL;
-			switch (arg2) {
-			case PR_MCE_KILL_CLEAR:
-				if (arg3 != 0)
-					return -EINVAL;
-				current->flags &= ~PF_MCE_PROCESS;
-				break;
-			case PR_MCE_KILL_SET:
-				current->flags |= PF_MCE_PROCESS;
-				if (arg3 == PR_MCE_KILL_EARLY)
-					current->flags |= PF_MCE_EARLY;
-				else if (arg3 == PR_MCE_KILL_LATE)
-					current->flags &= ~PF_MCE_EARLY;
-				else if (arg3 == PR_MCE_KILL_DEFAULT)
-					current->flags &=
-						~(PF_MCE_EARLY|PF_MCE_PROCESS);
-				else
-					return -EINVAL;
-				break;
-			default:
-				return -EINVAL;
-			}
-			error = 0;
-			break;
-		case PR_MCE_KILL_GET:
-			if (arg2 | arg3 | arg4 | arg5)
-				return -EINVAL;
-			if (current->flags & PF_MCE_PROCESS)
-				error = (current->flags & PF_MCE_EARLY) ?
-					PR_MCE_KILL_EARLY : PR_MCE_KILL_LATE;
-			else
-				error = PR_MCE_KILL_DEFAULT;
 			break;
 		default:
 			error = -EINVAL;
@@ -1784,9 +1825,9 @@ SYSCALL_DEFINE3(getcpu, unsigned __user *, cpup, unsigned __user *, nodep,
 
 char poweroff_cmd[POWEROFF_CMD_PATH_LEN] = "/sbin/poweroff";
 
-static void argv_cleanup(struct subprocess_info *info)
+static void argv_cleanup(char **argv, char **envp)
 {
-	argv_free(info->argv);
+	argv_free(argv);
 }
 
 /**
@@ -1820,7 +1861,7 @@ int orderly_poweroff(bool force)
 		goto out;
 	}
 
-	call_usermodehelper_setfns(info, NULL, argv_cleanup, NULL);
+	call_usermodehelper_setcleanup(info, argv_cleanup);
 
 	ret = call_usermodehelper_exec(info, UMH_NO_WAIT);
 

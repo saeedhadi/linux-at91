@@ -7,7 +7,6 @@
  */
 #include <linux/types.h>
 #include <linux/icmp.h>
-#include <linux/gfp.h>
 #include <linux/ip.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter_ipv4.h>
@@ -31,7 +30,6 @@
 #ifdef CONFIG_XFRM
 static void nat_decode_session(struct sk_buff *skb, struct flowi *fl)
 {
-	struct flowi4 *fl4 = &fl->u.ip4;
 	const struct nf_conn *ct;
 	const struct nf_conntrack_tuple *t;
 	enum ip_conntrack_info ctinfo;
@@ -50,25 +48,25 @@ static void nat_decode_session(struct sk_buff *skb, struct flowi *fl)
 		statusbit = IPS_SRC_NAT;
 
 	if (ct->status & statusbit) {
-		fl4->daddr = t->dst.u3.ip;
+		fl->fl4_dst = t->dst.u3.ip;
 		if (t->dst.protonum == IPPROTO_TCP ||
 		    t->dst.protonum == IPPROTO_UDP ||
 		    t->dst.protonum == IPPROTO_UDPLITE ||
 		    t->dst.protonum == IPPROTO_DCCP ||
 		    t->dst.protonum == IPPROTO_SCTP)
-			fl4->fl4_dport = t->dst.u.tcp.port;
+			fl->fl_ip_dport = t->dst.u.tcp.port;
 	}
 
 	statusbit ^= IPS_NAT_MASK;
 
 	if (ct->status & statusbit) {
-		fl4->saddr = t->src.u3.ip;
+		fl->fl4_src = t->src.u3.ip;
 		if (t->dst.protonum == IPPROTO_TCP ||
 		    t->dst.protonum == IPPROTO_UDP ||
 		    t->dst.protonum == IPPROTO_UDPLITE ||
 		    t->dst.protonum == IPPROTO_DCCP ||
 		    t->dst.protonum == IPPROTO_SCTP)
-			fl4->fl4_sport = t->src.u.tcp.port;
+			fl->fl_ip_sport = t->src.u.tcp.port;
 	}
 }
 #endif
@@ -99,7 +97,7 @@ nf_nat_fn(unsigned int hooknum,
 		return NF_ACCEPT;
 
 	/* Don't try to NAT if this packet is not conntracked */
-	if (nf_ct_is_untracked(ct))
+	if (ct == &nf_conntrack_untracked)
 		return NF_ACCEPT;
 
 	nat = nfct_nat(ct);
@@ -132,9 +130,16 @@ nf_nat_fn(unsigned int hooknum,
 		if (!nf_nat_initialized(ct, maniptype)) {
 			unsigned int ret;
 
-			ret = nf_nat_rule_find(skb, hooknum, in, out, ct);
-			if (ret != NF_ACCEPT)
+			if (hooknum == NF_INET_LOCAL_IN)
+				/* LOCAL_IN hook doesn't have a chain!  */
+				ret = alloc_null_binding(ct, hooknum);
+			else
+				ret = nf_nat_rule_find(skb, hooknum, in, out,
+						       ct);
+
+			if (ret != NF_ACCEPT) {
 				return ret;
+			}
 		} else
 			pr_debug("Already setup manip %s for ct %p\n",
 				 maniptype == IP_NAT_MANIP_SRC ? "SRC" : "DST",
@@ -162,9 +167,10 @@ nf_nat_in(unsigned int hooknum,
 
 	ret = nf_nat_fn(hooknum, skb, in, out, okfn);
 	if (ret != NF_DROP && ret != NF_STOLEN &&
-	    daddr != ip_hdr(skb)->daddr)
-		skb_dst_drop(skb);
-
+	    daddr != ip_hdr(skb)->daddr) {
+		dst_release(skb->dst);
+		skb->dst = NULL;
+	}
 	return ret;
 }
 
@@ -192,11 +198,11 @@ nf_nat_out(unsigned int hooknum,
 	    (ct = nf_ct_get(skb, &ctinfo)) != NULL) {
 		enum ip_conntrack_dir dir = CTINFO2DIR(ctinfo);
 
-		if ((ct->tuplehash[dir].tuple.src.u3.ip !=
-		     ct->tuplehash[!dir].tuple.dst.u3.ip) ||
-		    (ct->tuplehash[dir].tuple.src.u.all !=
-		     ct->tuplehash[!dir].tuple.dst.u.all)
-		   )
+		if (ct->tuplehash[dir].tuple.src.u3.ip !=
+		    ct->tuplehash[!dir].tuple.dst.u3.ip
+		    || ct->tuplehash[dir].tuple.src.u.all !=
+		       ct->tuplehash[!dir].tuple.dst.u.all
+		    )
 			return ip_xfrm_me_harder(skb) == 0 ? ret : NF_DROP;
 	}
 #endif
@@ -246,7 +252,7 @@ static struct nf_hook_ops nf_nat_ops[] __read_mostly = {
 	{
 		.hook		= nf_nat_in,
 		.owner		= THIS_MODULE,
-		.pf		= NFPROTO_IPV4,
+		.pf		= PF_INET,
 		.hooknum	= NF_INET_PRE_ROUTING,
 		.priority	= NF_IP_PRI_NAT_DST,
 	},
@@ -254,7 +260,7 @@ static struct nf_hook_ops nf_nat_ops[] __read_mostly = {
 	{
 		.hook		= nf_nat_out,
 		.owner		= THIS_MODULE,
-		.pf		= NFPROTO_IPV4,
+		.pf		= PF_INET,
 		.hooknum	= NF_INET_POST_ROUTING,
 		.priority	= NF_IP_PRI_NAT_SRC,
 	},
@@ -262,7 +268,7 @@ static struct nf_hook_ops nf_nat_ops[] __read_mostly = {
 	{
 		.hook		= nf_nat_local_fn,
 		.owner		= THIS_MODULE,
-		.pf		= NFPROTO_IPV4,
+		.pf		= PF_INET,
 		.hooknum	= NF_INET_LOCAL_OUT,
 		.priority	= NF_IP_PRI_NAT_DST,
 	},
@@ -270,7 +276,7 @@ static struct nf_hook_ops nf_nat_ops[] __read_mostly = {
 	{
 		.hook		= nf_nat_fn,
 		.owner		= THIS_MODULE,
-		.pf		= NFPROTO_IPV4,
+		.pf		= PF_INET,
 		.hooknum	= NF_INET_LOCAL_IN,
 		.priority	= NF_IP_PRI_NAT_SRC,
 	},
@@ -288,12 +294,12 @@ static int __init nf_nat_standalone_init(void)
 #endif
 	ret = nf_nat_rule_init();
 	if (ret < 0) {
-		pr_err("nf_nat_init: can't setup rules.\n");
+		printk("nf_nat_init: can't setup rules.\n");
 		goto cleanup_decode_session;
 	}
 	ret = nf_register_hooks(nf_nat_ops, ARRAY_SIZE(nf_nat_ops));
 	if (ret < 0) {
-		pr_err("nf_nat_init: can't register hooks.\n");
+		printk("nf_nat_init: can't register hooks.\n");
 		goto cleanup_rule_init;
 	}
 	return ret;

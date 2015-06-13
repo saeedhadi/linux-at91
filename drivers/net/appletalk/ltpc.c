@@ -215,6 +215,7 @@ static int dma;
 #include <linux/ioport.h>
 #include <linux/spinlock.h>
 #include <linux/in.h>
+#include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/errno.h>
 #include <linux/init.h>
@@ -227,7 +228,6 @@ static int dma;
 #include <linux/timer.h>
 #include <linux/atalk.h>
 #include <linux/bitops.h>
-#include <linux/gfp.h>
 
 #include <asm/system.h>
 #include <asm/dma.h>
@@ -641,6 +641,7 @@ done:
 		inb_p(base+7);
 		inb_p(base+7);
 	}
+	return;
 }
 
 
@@ -696,7 +697,7 @@ static int do_read(struct net_device *dev, void *cbuf, int cbuflen,
 
 static struct timer_list ltpc_timer;
 
-static netdev_tx_t ltpc_xmit(struct sk_buff *skb, struct net_device *dev);
+static int ltpc_xmit(struct sk_buff *skb, struct net_device *dev);
 
 static int read_30 ( struct net_device *dev)
 {
@@ -727,7 +728,7 @@ static int sendup_buffer (struct net_device *dev)
 
 	if (ltc->command != LT_RCVLAP) {
 		printk("unknown command 0x%02x from ltpc card\n",ltc->command);
-		return -1;
+		return(-1);
 	}
 	dnode = ltc->dnode;
 	snode = ltc->snode;
@@ -894,7 +895,7 @@ static void ltpc_poll(unsigned long l)
 
 /* DDP to LLAP translation */
 
-static netdev_tx_t ltpc_xmit(struct sk_buff *skb, struct net_device *dev)
+static int ltpc_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	/* in kernel 1.3.xx, on entry skb->data points to ddp header,
 	 * and skb->len is the length of the ddp data + ddp header
@@ -931,7 +932,7 @@ static netdev_tx_t ltpc_xmit(struct sk_buff *skb, struct net_device *dev)
 	dev->stats.tx_bytes += skb->len;
 
 	dev_kfree_skb(skb);
-	return NETDEV_TX_OK;
+	return 0;
 }
 
 /* initialization stuff */
@@ -1124,6 +1125,7 @@ struct net_device * __init ltpc_probe(void)
 		printk(KERN_INFO "Apple/Farallon LocalTalk-PC card at %03x, DMA%d.  Using polled mode.\n",io,dma);
 
 	dev->netdev_ops = &ltpc_netdev;
+	dev->mc_list = NULL;
 	dev->base_addr = io;
 	dev->irq = irq;
 	dev->dma = dma;
@@ -1156,7 +1158,7 @@ struct net_device * __init ltpc_probe(void)
 	}
 
 	/* grab it and don't let go :-) */
-	if (irq && request_irq( irq, ltpc_interrupt, 0, "ltpc", dev) >= 0)
+	if (irq && request_irq( irq, &ltpc_interrupt, 0, "ltpc", dev) >= 0)
 	{
 		(void) inb_p(io+7);  /* enable interrupts from board */
 		(void) inb_p(io+7);  /* and reset irq line */
@@ -1218,7 +1220,7 @@ static int __init ltpc_setup(char *str)
 		if (ints[0] > 2) {
 			dma = ints[3];
 		}
-		/* ignore any other parameters */
+		/* ignore any other paramters */
 	}
 	return 1;
 }

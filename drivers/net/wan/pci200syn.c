@@ -16,7 +16,6 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/capability.h>
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/fcntl.h>
@@ -220,7 +219,7 @@ static int pci200_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		    new_line.clock_type != CLOCK_TXFROMRX &&
 		    new_line.clock_type != CLOCK_INT &&
 		    new_line.clock_type != CLOCK_TXINT)
-			return -EINVAL;	/* No such clock setting */
+		return -EINVAL;	/* No such clock setting */
 
 		if (new_line.loopback != 0 && new_line.loopback != 1)
 			return -EINVAL;
@@ -361,6 +360,15 @@ static int __devinit pci200_pci_init_one(struct pci_dev *pdev,
 	       " %u RX packets rings\n", ramsize / 1024, ramphys,
 	       pdev->irq, card->tx_ring_buffers, card->rx_ring_buffers);
 
+	if (pdev->subsystem_device == PCI_DEVICE_ID_PLX_9050) {
+		printk(KERN_ERR "Detected PCI200SYN card with old "
+		       "configuration data.\n");
+		printk(KERN_ERR "See <http://www.kernel.org/pub/"
+		       "linux/utils/net/hdlc/pci200syn/> for update.\n");
+		printk(KERN_ERR "The card will stop working with"
+		       " future versions of Linux if not updated.\n");
+	}
+
 	if (card->tx_ring_buffers < 1) {
 		printk(KERN_ERR "pci200syn: RAM test failed\n");
 		pci200_pci_remove_one(pdev);
@@ -417,7 +425,9 @@ static int __devinit pci200_pci_init_one(struct pci_dev *pdev,
 
 
 
-static DEFINE_PCI_DEVICE_TABLE(pci200_pci_tbl) = {
+static struct pci_device_id pci200_pci_tbl[] __devinitdata = {
+	{ PCI_VENDOR_ID_PLX, PCI_DEVICE_ID_PLX_9050, PCI_VENDOR_ID_PLX,
+	  PCI_DEVICE_ID_PLX_9050, 0, 0, 0 },
 	{ PCI_VENDOR_ID_PLX, PCI_DEVICE_ID_PLX_9050, PCI_VENDOR_ID_PLX,
 	  PCI_DEVICE_ID_PLX_PCI200SYN, 0, 0, 0 },
 	{ 0, }

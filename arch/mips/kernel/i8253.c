@@ -7,16 +7,14 @@
 #include <linux/interrupt.h>
 #include <linux/jiffies.h>
 #include <linux/module.h>
-#include <linux/smp.h>
 #include <linux/spinlock.h>
-#include <linux/irq.h>
 
 #include <asm/delay.h>
 #include <asm/i8253.h>
 #include <asm/io.h>
 #include <asm/time.h>
 
-DEFINE_RAW_SPINLOCK(i8253_lock);
+DEFINE_SPINLOCK(i8253_lock);
 EXPORT_SYMBOL(i8253_lock);
 
 /*
@@ -27,7 +25,7 @@ EXPORT_SYMBOL(i8253_lock);
 static void init_pit_timer(enum clock_event_mode mode,
 			   struct clock_event_device *evt)
 {
-	raw_spin_lock(&i8253_lock);
+	spin_lock(&i8253_lock);
 
 	switch(mode) {
 	case CLOCK_EVT_MODE_PERIODIC:
@@ -56,7 +54,7 @@ static void init_pit_timer(enum clock_event_mode mode,
 		/* Nothing to do here */
 		break;
 	}
-	raw_spin_unlock(&i8253_lock);
+	spin_unlock(&i8253_lock);
 }
 
 /*
@@ -66,10 +64,10 @@ static void init_pit_timer(enum clock_event_mode mode,
  */
 static int pit_next_event(unsigned long delta, struct clock_event_device *evt)
 {
-	raw_spin_lock(&i8253_lock);
+	spin_lock(&i8253_lock);
 	outb_p(delta & 0xff , PIT_CH0);	/* LSB */
 	outb(delta >> 8 , PIT_CH0);	/* MSB */
-	raw_spin_unlock(&i8253_lock);
+	spin_unlock(&i8253_lock);
 
 	return 0;
 }
@@ -99,7 +97,7 @@ static irqreturn_t timer_interrupt(int irq, void *dev_id)
 
 static struct irqaction irq0  = {
 	.handler = timer_interrupt,
-	.flags = IRQF_DISABLED | IRQF_NOBALANCING | IRQF_TIMER,
+	.flags = IRQF_DISABLED | IRQF_NOBALANCING,
 	.name = "timer"
 };
 
@@ -138,7 +136,7 @@ static cycle_t pit_read(struct clocksource *cs)
 	static int old_count;
 	static u32 old_jifs;
 
-	raw_spin_lock_irqsave(&i8253_lock, flags);
+	spin_lock_irqsave(&i8253_lock, flags);
 	/*
 	 * Although our caller may have the read side of xtime_lock,
 	 * this is now a seqlock, and we are cheating in this routine
@@ -184,7 +182,7 @@ static cycle_t pit_read(struct clocksource *cs)
 	old_count = count;
 	old_jifs = jifs;
 
-	raw_spin_unlock_irqrestore(&i8253_lock, flags);
+	spin_unlock_irqrestore(&i8253_lock, flags);
 
 	count = (LATCH - 1) - count;
 

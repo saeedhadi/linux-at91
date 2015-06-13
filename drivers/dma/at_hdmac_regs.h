@@ -103,8 +103,6 @@
 /* Bitfields in CTRLB */
 #define	ATC_SIF(i)		(0x3 & (i))	/* Src tx done via AHB-Lite Interface i */
 #define	ATC_DIF(i)		((0x3 & (i)) <<  4)	/* Dst tx done via AHB-Lite Interface i */
-#define MEM_IF			0		/* specify AHB interface 0 as memory interface */
-#define PER_IF			1		/* specify AHB interface 1 as peripheral interface */
 #define	ATC_SRC_PIP		(0x1 <<  8)	/* Source Picture-in-Picture enabled */
 #define	ATC_DST_PIP		(0x1 << 12)	/* Destination Picture-in-Picture enabled */
 #define	ATC_SRC_DSCR_DIS	(0x1 << 16)	/* Src Descriptor fetch disable */
@@ -161,18 +159,15 @@ struct at_lli {
  * @txd: support for the async_tx api
  * @desc_node: node on the channed descriptors list
  * @len: total transaction bytecount
- * @tx_buswidth: transmit buswidth
  */
 struct at_desc {
 	/* FIRST values the hardware uses */
 	struct at_lli			lli;
 
 	/* THEN values for driver housekeeping */
-	struct list_head		tx_list;
 	struct dma_async_tx_descriptor	txd;
 	struct list_head		desc_node;
 	size_t				len;
-	u32                             tx_buswidth;
 };
 
 static inline struct at_desc *
@@ -185,30 +180,14 @@ txd_to_at_desc(struct dma_async_tx_descriptor *txd)
 /*--  Channels  --------------------------------------------------------*/
 
 /**
- * atc_status - information bits stored in channel status flag
- *
- * Manipulated with atomic operations.
- */
-enum atc_status {
-	ATC_IS_ERROR = 0,
-	ATC_IS_PAUSED = 1,
-	ATC_IS_BTC = 2,
-	ATC_IS_CYCLIC = 24,
-};
-
-/**
  * struct at_dma_chan - internal representation of an Atmel HDMAC channel
  * @chan_common: common dmaengine channel object members
  * @device: parent device
  * @ch_regs: memory mapped register base
  * @mask: channel index in a mask
- * @status: transmit status information from irq/prep* functions
+ * @error_status: transmit error status information from irq handler
  *                to tasklet (use atomic operations)
  * @tasklet: bottom half to finish transaction work
- * @save_cfg: configuration register that is saved on suspend/resume cycle
- * @save_dscr: for cyclic operations, preserve next descriptor address in
- *             the cyclic list on suspend/resume cycle
- * @save_len: to record dma buffer length
  * @lock: serializes enqueue/dequeue operations to descriptors lists
  * @completed_cookie: identifier for the most recently completed operation
  * @active_list: list of descriptors dmaengine is being running on
@@ -221,11 +200,8 @@ struct at_dma_chan {
 	struct at_dma		*device;
 	void __iomem		*ch_regs;
 	u8			mask;
-	unsigned long		status;
+	unsigned long		error_status;
 	struct tasklet_struct	tasklet;
-	u32			save_cfg;
-	u32			save_dscr;
-	int			remain_desc;
 
 	spinlock_t		lock;
 
@@ -256,7 +232,6 @@ static inline struct at_dma_chan *to_at_dma_chan(struct dma_chan *dchan)
  * @chan_common: common dmaengine dma_device object members
  * @ch_regs: memory mapped register base
  * @clk: dma controller clock
- * @save_imr: interrupt mask register that is saved on suspend/resume cycle
  * @all_chan_mask: all channels availlable in a mask
  * @dma_desc_pool: base of DMA descriptor region (DMA address)
  * @chan: channels table to store at_dma_chan structures
@@ -265,7 +240,6 @@ struct at_dma {
 	struct dma_device	dma_common;
 	void __iomem		*regs;
 	struct clk		*clk;
-	u32			save_imr;
 
 	u8			all_chan_mask;
 
@@ -334,8 +308,8 @@ static void atc_setup_irq(struct at_dma_chan *atchan, int on)
 	struct at_dma	*atdma = to_at_dma(atchan->chan_common.device);
 	u32		ebci;
 
-	/* enable interrupts on buffer transfer completion & error */
-	ebci =    AT_DMA_BTC(atchan->chan_common.chan_id)
+	/* enable interrupts on buffer chain completion & error */
+	ebci =    AT_DMA_CBTC(atchan->chan_common.chan_id)
 		| AT_DMA_ERR(atchan->chan_common.chan_id);
 	if (on)
 		dma_writel(atdma, EBCIER, ebci);
@@ -372,12 +346,7 @@ static inline int atc_chan_is_enabled(struct at_dma_chan *atchan)
  */
 static void set_desc_eol(struct at_desc *desc)
 {
-	u32 ctrlb = desc->lli.ctrlb;
-
-	ctrlb &= ~ATC_IEN;
-	ctrlb |= ATC_SRC_DSCR_DIS | ATC_DST_DSCR_DIS;
-
-	desc->lli.ctrlb = ctrlb;
+	desc->lli.ctrlb |= ATC_SRC_DSCR_DIS | ATC_DST_DSCR_DIS;
 	desc->lli.dscr = 0;
 }
 

@@ -12,7 +12,7 @@ struct pt_regs;
 
 extern int		register_exec_domain(struct exec_domain *);
 extern int		unregister_exec_domain(struct exec_domain *);
-extern int		__set_personality(unsigned int);
+extern int		__set_personality(unsigned long);
 
 #endif /* __KERNEL__ */
 
@@ -40,10 +40,7 @@ enum {
  * Security-relevant compatibility flags that must be
  * cleared upon setuid or setgid exec:
  */
-#define PER_CLEAR_ON_SETID (READ_IMPLIES_EXEC  | \
-			    ADDR_NO_RANDOMIZE  | \
-			    ADDR_COMPAT_LAYOUT | \
-			    MMAP_PAGE_ZERO)
+#define PER_CLEAR_ON_SETID (READ_IMPLIES_EXEC|ADDR_NO_RANDOMIZE)
 
 /*
  * Personality types.

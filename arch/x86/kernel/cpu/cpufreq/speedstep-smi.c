@@ -17,6 +17,7 @@
 #include <linux/moduleparam.h>
 #include <linux/init.h>
 #include <linux/cpufreq.h>
+#include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <asm/ist.h>
@@ -34,7 +35,7 @@ static int smi_cmd;
 static unsigned int smi_sig;
 
 /* info about the processor */
-static enum speedstep_processor speedstep_processor;
+static unsigned int speedstep_processor;
 
 /*
  * There are only two frequency states for each processor. Values
@@ -292,7 +293,7 @@ static int speedstep_cpu_init(struct cpufreq_policy *policy)
 
 	result = speedstep_smi_ownership();
 	if (result) {
-		dprintk("fails in acquiring ownership of a SMI interface.\n");
+		dprintk("fails in aquiring ownership of a SMI interface.\n");
 		return -EINVAL;
 	}
 
@@ -360,7 +361,7 @@ static int speedstep_resume(struct cpufreq_policy *policy)
 	int result = speedstep_smi_ownership();
 
 	if (result)
-		dprintk("fails in re-acquiring ownership of a SMI interface.\n");
+		dprintk("fails in re-aquiring ownership of a SMI interface.\n");
 
 	return result;
 }

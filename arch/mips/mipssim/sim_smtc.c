@@ -27,7 +27,6 @@
 #include <asm/atomic.h>
 #include <asm/cpu.h>
 #include <asm/processor.h>
-#include <asm/smtc.h>
 #include <asm/system.h>
 #include <asm/mmu_context.h>
 #include <asm/smtc_ipi.h>
@@ -44,12 +43,11 @@ static void ssmtc_send_ipi_single(int cpu, unsigned int action)
 	/* "CPU" may be TC of same VPE, VPE of same CPU, or different CPU */
 }
 
-static inline void ssmtc_send_ipi_mask(const struct cpumask *mask,
-				       unsigned int action)
+static inline void ssmtc_send_ipi_mask(cpumask_t mask, unsigned int action)
 {
 	unsigned int i;
 
-	for_each_cpu(i, mask)
+	for_each_cpu_mask(i, mask)
 		ssmtc_send_ipi_single(i, action);
 }
 
@@ -58,6 +56,8 @@ static inline void ssmtc_send_ipi_mask(const struct cpumask *mask,
  */
 static void __cpuinit ssmtc_init_secondary(void)
 {
+	void smtc_init_secondary(void);
+
 	smtc_init_secondary();
 }
 

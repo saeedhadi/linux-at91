@@ -10,20 +10,18 @@
 #include <asm/apic.h>
 #include <asm/ipi.h>
 
-static DEFINE_PER_CPU(u32, x86_cpu_to_logical_apicid);
+DEFINE_PER_CPU(u32, x86_cpu_to_logical_apicid);
 
 static int x2apic_acpi_madt_oem_check(char *oem_id, char *oem_table_id)
 {
 	return x2apic_enabled();
 }
 
-/*
- * need to use more than cpu 0, because we need more vectors when
- * MSI-X are used.
- */
+/* Start with all IRQs pointing to boot CPU.  IRQ balancing will shift them. */
+
 static const struct cpumask *x2apic_target_cpus(void)
 {
-	return cpu_online_mask;
+	return cpumask_of(0);
 }
 
 /*
@@ -148,7 +146,10 @@ x2apic_cpu_mask_to_apicid_and(const struct cpumask *cpumask,
 			break;
 	}
 
-	return per_cpu(x86_cpu_to_logical_apicid, cpu);
+	if (cpu < nr_cpu_ids)
+		return per_cpu(x86_cpu_to_logical_apicid, cpu);
+
+	return BAD_APICID;
 }
 
 static unsigned int x2apic_cluster_phys_get_apic_id(unsigned long x)
@@ -169,7 +170,7 @@ static unsigned long set_apic_id(unsigned int id)
 
 static int x2apic_cluster_phys_pkg_id(int initial_apicid, int index_msb)
 {
-	return initial_apicid >> index_msb;
+	return current_cpu_data.initial_apicid >> index_msb;
 }
 
 static void x2apic_send_IPI_self(int vector)
@@ -206,6 +207,8 @@ struct apic apic_x2apic_cluster = {
 	.ioapic_phys_id_map		= NULL,
 	.setup_apic_routing		= NULL,
 	.multi_timer_check		= NULL,
+	.apicid_to_node			= NULL,
+	.cpu_to_logical_apicid		= NULL,
 	.cpu_present_to_apicid		= default_cpu_present_to_apicid,
 	.apicid_to_cpu_present		= NULL,
 	.setup_portio_remap		= NULL,

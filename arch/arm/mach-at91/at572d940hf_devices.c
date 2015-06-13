@@ -274,8 +274,8 @@ void __init at91_add_device_mmc(short mmc_id, struct at91_mmc_data *data) {}
  *  NAND / SmartMedia
  * -------------------------------------------------------------------- */
 
-#if defined(CONFIG_MTD_NAND_ATMEL) || defined(CONFIG_MTD_NAND_ATMEL_MODULE)
-static struct atmel_nand_data nand_data;
+#if defined(CONFIG_MTD_NAND_AT91) || defined(CONFIG_MTD_NAND_AT91_MODULE)
+static struct at91_nand_data nand_data;
 
 #define NAND_BASE	AT91_CHIPSELECT_3
 
@@ -304,8 +304,10 @@ void __init at91_add_device_nand(struct atmel_nand_data *data)
 	if (!data)
 		return;
 
-	csa = at91_sys_read(AT91_MATRIX_EBICSA);
-	at91_sys_write(AT91_MATRIX_EBICSA, csa | AT91_MATRIX_CS3A_SMC_SMARTMEDIA);
+#warning "Check this register definitions"
+
+	csa = at91_sys_read(AT572D940HF_MATRIX_EBICSA);				
+	at91_sys_write(AT572D940HF_MATRIX_EBICSA, csa | AT572D940HF_MATRIX_CS3A_SMC);
 
 	/* enable pin */
 	if (data->enable_pin)

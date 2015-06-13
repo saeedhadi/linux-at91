@@ -50,7 +50,6 @@ struct atmel_pdc_regs {
 struct atmel_ssc_mask {
 	u32	ssc_enable;		/* SSC recv/trans enable */
 	u32	ssc_disable;		/* SSC recv/trans disable */
-	u32	ssc_error;		/* SSC error conditions */
 	u32	ssc_endx;		/* SSC ENDTX or ENDRX */
 	u32	ssc_endbuf;		/* SSC TXBUFE or RXBUFF */
 	u32	pdc_enable;		/* PDC recv/trans enable */
@@ -61,20 +60,22 @@ struct atmel_ssc_mask {
  * This structure, shared between the PCM driver and the interface,
  * contains all information required by the PCM driver to perform the
  * PDC DMA operation.  All fields except dma_intr_handler() are initialized
- * by the interface.  The dma_intr_handler() pointer is set by the PCM
+ * by the interface.  The dms_intr_handler() pointer is set by the PCM
  * driver and called by the interface SSC interrupt handler if it is
  * non-NULL.
  */
 struct atmel_pcm_dma_params {
 	char *name;			/* stream identifier */
-	int data_xfer_size;		/* PDC counter increment in bytes,
-					   DMA data transfer size in bytes */
+	int pdc_xfer_size;		/* PDC counter increment in bytes */
 	struct ssc_device *ssc;		/* SSC device for stream */
 	struct atmel_pdc_regs *pdc;	/* PDC receive or transmit registers */
 	struct atmel_ssc_mask *mask;	/* SSC & PDC status bits */
 	struct snd_pcm_substream *substream;
 	void (*dma_intr_handler)(u32, struct snd_pcm_substream *);
 };
+
+extern struct snd_soc_platform atmel_soc_platform;
+
 
 /*
  * SSC register access (since ssc_writel() / ssc_readl() require literal name)

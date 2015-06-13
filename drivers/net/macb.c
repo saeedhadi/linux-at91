@@ -33,9 +33,21 @@
 /* Make the IP header word-aligned (the ethernet header is 14 bytes) */
 #define RX_OFFSET		2
 
-#define TX_RING_SIZE		128
+#if defined(CONFIG_ARCH_AT91) && defined(CONFIG_MACB_TX_SRAM)
+	#if defined(CONFIG_ARCH_AT91SAM9260)
+		#define TX_RING_SIZE       2
+	#elif defined(CONFIG_ARCH_AT91SAM9263)
+		#define TX_RING_SIZE       32
+	#endif
+	#define TX_BUFFER_SIZE       1536
+	#define TX_RING_BYTES        (sizeof(struct dma_desc) * TX_RING_SIZE)
+	#define TX_DMA_SIZE      ((TX_RING_BYTES) + (TX_RING_SIZE) * (TX_BUFFER_SIZE))
+#else
+	#define TX_RING_SIZE     128
+	#define TX_RING_BYTES        (sizeof(struct dma_desc) * TX_RING_SIZE)
+#endif
+
 #define DEF_TX_RING_PENDING	(TX_RING_SIZE - 1)
-#define TX_RING_BYTES		(sizeof(struct dma_desc) * TX_RING_SIZE)
 
 #define TX_RING_GAP(bp)						\
 	(TX_RING_SIZE - (bp)->tx_pending)
@@ -189,11 +201,18 @@ static void macb_handle_link_change(struct net_device *dev)
 static int macb_mii_probe(struct net_device *dev)
 {
 	struct macb *bp = netdev_priv(dev);
-	struct phy_device *phydev;
+	struct phy_device *phydev = NULL;
 	struct eth_platform_data *pdata;
-	int ret;
+	int phy_addr;
 
-	phydev = phy_find_first(bp->mii_bus);
+	/* find the first phy */
+	for (phy_addr = 0; phy_addr < PHY_MAX_ADDR; phy_addr++) {
+		if (bp->mii_bus->phy_map[phy_addr]) {
+			phydev = bp->mii_bus->phy_map[phy_addr];
+			break;
+		}
+	}
+
 	if (!phydev) {
 		printk (KERN_ERR "%s: no PHY found\n", dev->name);
 		return -1;
@@ -203,13 +222,17 @@ static int macb_mii_probe(struct net_device *dev)
 	/* TODO : add pin_irq */
 
 	/* attach the mac to the phy */
-	ret = phy_connect_direct(dev, phydev, &macb_handle_link_change, 0,
-				 pdata && pdata->is_rmii ?
-				 PHY_INTERFACE_MODE_RMII :
-				 PHY_INTERFACE_MODE_MII);
-	if (ret) {
+	if (pdata && pdata->is_rmii) {
+		phydev = phy_connect(dev, dev_name(&phydev->dev),
+			&macb_handle_link_change, 0, PHY_INTERFACE_MODE_RMII);
+	} else {
+		phydev = phy_connect(dev, dev_name(&phydev->dev),
+			&macb_handle_link_change, 0, PHY_INTERFACE_MODE_MII);
+	}
+
+	if (IS_ERR(phydev)) {
 		printk(KERN_ERR "%s: Could not attach to PHY\n", dev->name);
-		return ret;
+		return PTR_ERR(phydev);
 	}
 
 	/* mask with MAC supported features */
@@ -230,7 +253,7 @@ static int macb_mii_init(struct macb *bp)
 	struct eth_platform_data *pdata;
 	int err = -ENXIO, i;
 
-	/* Enable management port */
+	/* Enable managment port */
 	macb_writel(bp, NCR, MACB_BIT(MPE));
 
 	bp->mii_bus = mdiobus_alloc();
@@ -260,7 +283,7 @@ static int macb_mii_init(struct macb *bp)
 	for (i = 0; i < PHY_MAX_ADDR; i++)
 		bp->mii_bus->irq[i] = PHY_POLL;
 
-	dev_set_drvdata(&bp->dev->dev, bp->mii_bus);
+	platform_set_drvdata(bp->dev, bp->mii_bus);
 
 	if (mdiobus_register(bp->mii_bus))
 		goto err_out_free_mdio_irq;
@@ -367,8 +390,10 @@ static void macb_tx(struct macb *bp)
 
 		dev_dbg(&bp->pdev->dev, "skb %u (data %p) TX complete\n",
 			tail, skb->data);
+#if !defined(CONFIG_MACB_TX_SRAM)
 		dma_unmap_single(&bp->pdev->dev, rp->mapping, skb->len,
 				 DMA_TO_DEVICE);
+#endif
 		bp->stats.tx_packets++;
 		bp->stats.tx_bytes += skb->len;
 		rp->skb = NULL;
@@ -407,7 +432,7 @@ static int macb_rx_frame(struct macb *bp, unsigned int first_frag,
 	}
 
 	skb_reserve(skb, RX_OFFSET);
-	skb_checksum_none_assert(skb);
+	skb->ip_summed = CHECKSUM_NONE;
 	skb_put(skb, len);
 
 	for (frag = first_frag; ; frag = NEXT_RX(frag)) {
@@ -515,15 +540,14 @@ static int macb_poll(struct napi_struct *napi, int budget)
 		(unsigned long)status, budget);
 
 	work_done = macb_rx(bp, budget);
-	if (work_done < budget) {
+	if (work_done < budget)
 		napi_complete(napi);
 
-		/*
-		 * We've done what we can to clean the buffers. Make sure we
-		 * get notified when new packets arrive.
-		 */
-		macb_writel(bp, IER, MACB_RX_INT_FLAGS);
-	}
+	/*
+	 * We've done what we can to clean the buffers. Make sure we
+	 * get notified when new packets arrive.
+	 */
+	macb_writel(bp, IER, MACB_RX_INT_FLAGS);
 
 	/* TODO: Handle errors */
 
@@ -551,16 +575,12 @@ static irqreturn_t macb_interrupt(int irq, void *dev_id)
 		}
 
 		if (status & MACB_RX_INT_FLAGS) {
-			/*
-			 * There's no point taking any more interrupts
-			 * until we have processed the buffers. The
-			 * scheduling call may fail if the poll routine
-			 * is already scheduled, so disable interrupts
-			 * now.
-			 */
-			macb_writel(bp, IDR, MACB_RX_INT_FLAGS);
-
 			if (napi_schedule_prep(&bp->napi)) {
+				/*
+				 * There's no point taking any more interrupts
+				 * until we have processed the buffers
+				 */
+				macb_writel(bp, IDR, MACB_RX_INT_FLAGS);
 				dev_dbg(&bp->pdev->dev,
 					"scheduling RX softirq\n");
 				__napi_schedule(&bp->napi);
@@ -593,28 +613,12 @@ static irqreturn_t macb_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-#ifdef CONFIG_NET_POLL_CONTROLLER
-/*
- * Polling receive - used by netconsole and other diagnostic tools
- * to allow network i/o with interrupts disabled.
- */
-static void macb_poll_controller(struct net_device *dev)
-{
-	unsigned long flags;
-
-	local_irq_save(flags);
-	macb_interrupt(dev->irq, dev);
-	local_irq_restore(flags);
-}
-#endif
-
 static int macb_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct macb *bp = netdev_priv(dev);
 	dma_addr_t mapping;
 	unsigned int len, entry;
 	u32 ctrl;
-	unsigned long flags;
 
 #ifdef DEBUG
 	int i;
@@ -630,23 +634,28 @@ static int macb_start_xmit(struct sk_buff *skb, struct net_device *dev)
 #endif
 
 	len = skb->len;
-	spin_lock_irqsave(&bp->lock, flags);
+	spin_lock_irq(&bp->lock);
 
 	/* This is a hard error, log it. */
 	if (TX_BUFFS_AVAIL(bp) < 1) {
 		netif_stop_queue(dev);
-		spin_unlock_irqrestore(&bp->lock, flags);
+		spin_unlock_irq(&bp->lock);
 		dev_err(&bp->pdev->dev,
 			"BUG! Tx Ring full when queue awake!\n");
 		dev_dbg(&bp->pdev->dev, "tx_head = %u, tx_tail = %u\n",
 			bp->tx_head, bp->tx_tail);
-		return NETDEV_TX_BUSY;
+		return 1;
 	}
 
 	entry = bp->tx_head;
 	dev_dbg(&bp->pdev->dev, "Allocated ring entry %u\n", entry);
+#if defined(CONFIG_ARCH_AT91) && defined(CONFIG_MACB_TX_SRAM)
+	mapping = bp->tx_ring[entry].addr;
+	memcpy(bp->tx_buffers + entry * TX_BUFFER_SIZE, skb->data, len);
+#else
 	mapping = dma_map_single(&bp->pdev->dev, skb->data,
 				 len, DMA_TO_DEVICE);
+#endif
 	bp->tx_skb[entry].skb = skb;
 	bp->tx_skb[entry].mapping = mapping;
 	dev_dbg(&bp->pdev->dev, "Mapped skb data %p to DMA addr %08lx\n",
@@ -657,7 +666,9 @@ static int macb_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (entry == (TX_RING_SIZE - 1))
 		ctrl |= MACB_BIT(TX_WRAP);
 
+#if !defined(CONFIG_MACB_TX_SRAM)
 	bp->tx_ring[entry].addr = mapping;
+#endif
 	bp->tx_ring[entry].ctrl = ctrl;
 	wmb();
 
@@ -669,9 +680,11 @@ static int macb_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (TX_BUFFS_AVAIL(bp) < 1)
 		netif_stop_queue(dev);
 
-	spin_unlock_irqrestore(&bp->lock, flags);
+	spin_unlock_irq(&bp->lock);
 
-	return NETDEV_TX_OK;
+	dev->trans_start = jiffies;
+
+	return 0;
 }
 
 static void macb_free_consistent(struct macb *bp)
@@ -686,8 +699,12 @@ static void macb_free_consistent(struct macb *bp)
 		bp->rx_ring = NULL;
 	}
 	if (bp->tx_ring) {
+#if defined(CONFIG_ARCH_AT91) && defined(CONFIG_MACB_TX_SRAM)
+		iounmap((void *)bp->tx_ring);
+#else
 		dma_free_coherent(&bp->pdev->dev, TX_RING_BYTES,
 				  bp->tx_ring, bp->tx_ring_dma);
+#endif
 		bp->tx_ring = NULL;
 	}
 	if (bp->rx_buffers) {
@@ -696,6 +713,11 @@ static void macb_free_consistent(struct macb *bp)
 				  bp->rx_buffers, bp->rx_buffers_dma);
 		bp->rx_buffers = NULL;
 	}
+
+#if defined(CONFIG_ARCH_AT91) && defined(CONFIG_MACB_TX_SRAM)
+	if (bp->tx_ring_dma)
+		release_mem_region(bp->tx_ring_dma, TX_DMA_SIZE);
+#endif
 }
 
 static int macb_alloc_consistent(struct macb *bp)
@@ -716,14 +738,45 @@ static int macb_alloc_consistent(struct macb *bp)
 		"Allocated RX ring of %d bytes at %08lx (mapped %p)\n",
 		size, (unsigned long)bp->rx_ring_dma, bp->rx_ring);
 
+#if defined(CONFIG_ARCH_AT91) && defined(CONFIG_MACB_TX_SRAM)
+#if  defined(CONFIG_ARCH_AT91SAM9260)
+	if (!cpu_is_at91sam9xe()
+	&& request_mem_region(AT91SAM9260_SRAM0_BASE, TX_DMA_SIZE, "macb")) {
+		bp->tx_ring_dma = AT91SAM9260_SRAM0_BASE;
+	} else {
+		if (request_mem_region(AT91SAM9260_SRAM1_BASE, TX_DMA_SIZE, "macb")) {
+			bp->tx_ring_dma = AT91SAM9260_SRAM1_BASE;
+		} else {
+			printk(KERN_WARNING "Cannot request SRAM memory for TX ring, already used\n");
+			return -EBUSY;
+		}
+	}
+#elif defined(CONFIG_ARCH_AT91SAM9263)
+	if (request_mem_region(AT91SAM9263_SRAM0_BASE, TX_DMA_SIZE, "macb")) {
+		bp->tx_ring_dma = AT91SAM9263_SRAM0_BASE;
+	} else {
+		printk(KERN_WARNING "Cannot request SRAM memory for TX ring, already used\n");
+		return -EBUSY;
+	}
+#endif
+
+	bp->tx_ring = ioremap(bp->tx_ring_dma, TX_DMA_SIZE);
+	if (!bp->tx_ring)
+		return -ENOMEM;
+
+	bp->tx_buffers_dma = bp->tx_ring_dma + TX_RING_BYTES;
+	bp->tx_buffers = (char *) bp->tx_ring + TX_RING_BYTES;
+#else
 	size = TX_RING_BYTES;
 	bp->tx_ring = dma_alloc_coherent(&bp->pdev->dev, size,
 					 &bp->tx_ring_dma, GFP_KERNEL);
 	if (!bp->tx_ring)
 		goto out_err;
+
 	dev_dbg(&bp->pdev->dev,
 		"Allocated TX ring of %d bytes at %08lx (mapped %p)\n",
 		size, (unsigned long)bp->tx_ring_dma, bp->tx_ring);
+#endif
 
 	size = RX_RING_SIZE * RX_BUFFER_SIZE;
 	bp->rx_buffers = dma_alloc_coherent(&bp->pdev->dev, size,
@@ -754,10 +807,18 @@ static void macb_init_rings(struct macb *bp)
 	}
 	bp->rx_ring[RX_RING_SIZE - 1].addr |= MACB_BIT(RX_WRAP);
 
+#if defined(CONFIG_ARCH_AT91) && defined(CONFIG_MACB_TX_SRAM)
+	for (i = 0; i < TX_RING_SIZE; i++) {
+		bp->tx_ring[i].addr = bp->tx_buffers_dma + i * TX_BUFFER_SIZE;
+		bp->tx_ring[i].ctrl = MACB_BIT(TX_USED);
+	}
+#else
 	for (i = 0; i < TX_RING_SIZE; i++) {
 		bp->tx_ring[i].addr = 0;
 		bp->tx_ring[i].ctrl = MACB_BIT(TX_USED);
 	}
+#endif
+
 	bp->tx_ring[TX_RING_SIZE - 1].ctrl |= MACB_BIT(TX_WRAP);
 
 	bp->rx_tail = bp->tx_head = bp->tx_tail = 0;
@@ -796,7 +857,6 @@ static void macb_init_hw(struct macb *bp)
 	config = macb_readl(bp, NCFGR) & MACB_BF(CLK, -1L);
 	config |= MACB_BIT(PAE);		/* PAuse Enable */
 	config |= MACB_BIT(DRFCS);		/* Discard Rx FCS */
-	config |= MACB_BIT(BIG);		/* Receive oversized frames */
 	if (bp->dev->flags & IFF_PROMISC)
 		config |= MACB_BIT(CAF);	/* Copy All Frames */
 	if (!(bp->dev->flags & IFF_BROADCAST))
@@ -886,15 +946,18 @@ static int hash_get_index(__u8 *addr)
  */
 static void macb_sethashtable(struct net_device *dev)
 {
-	struct netdev_hw_addr *ha;
+	struct dev_mc_list *curr;
 	unsigned long mc_filter[2];
-	unsigned int bitnr;
+	unsigned int i, bitnr;
 	struct macb *bp = netdev_priv(dev);
 
 	mc_filter[0] = mc_filter[1] = 0;
 
-	netdev_for_each_mc_addr(ha, dev) {
-		bitnr = hash_get_index(ha->addr);
+	curr = dev->mc_list;
+	for (i = 0; i < dev->mc_count; i++, curr = curr->next) {
+		if (!curr) break;	/* unexpected end of list */
+
+		bitnr = hash_get_index(curr->dmi_addr);
 		mc_filter[bitnr >> 5] |= 1 << (bitnr & 31);
 	}
 
@@ -924,7 +987,7 @@ static void macb_set_rx_mode(struct net_device *dev)
 		macb_writel(bp, HRB, -1);
 		macb_writel(bp, HRT, -1);
 		cfg |= MACB_BIT(NCFGR_MTI);
-	} else if (!netdev_mc_empty(dev)) {
+	} else if (dev->mc_count > 0) {
 		/* Enable specific multicasts */
 		macb_sethashtable(dev);
 		cfg |= MACB_BIT(NCFGR_MTI);
@@ -1069,7 +1132,7 @@ static void macb_get_drvinfo(struct net_device *dev,
 	strcpy(info->bus_info, dev_name(&bp->pdev->dev));
 }
 
-static const struct ethtool_ops macb_ethtool_ops = {
+static struct ethtool_ops macb_ethtool_ops = {
 	.get_settings		= macb_get_settings,
 	.set_settings		= macb_set_settings,
 	.get_drvinfo		= macb_get_drvinfo,
@@ -1087,7 +1150,7 @@ static int macb_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 	if (!phydev)
 		return -ENODEV;
 
-	return phy_mii_ioctl(phydev, rq, cmd);
+	return phy_mii_ioctl(phydev, if_mii(rq), cmd);
 }
 
 static const struct net_device_ops macb_netdev_ops = {
@@ -1100,9 +1163,6 @@ static const struct net_device_ops macb_netdev_ops = {
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_set_mac_address	= eth_mac_addr,
-#ifdef CONFIG_NET_POLL_CONTROLLER
-	.ndo_poll_controller	= macb_poll_controller,
-#endif
 };
 
 static int __init macb_probe(struct platform_device *pdev)

@@ -61,7 +61,7 @@ endif
 
 quiet_cmd_uimage = UIMAGE  $@
       cmd_uimage = $(CONFIG_SHELL) $(MKIMAGE) -A arm -O linux -T kernel \
-		   -C none -a $(LOADADDR) -e $(STARTADDR) \
+		   -C none -a $(LOADADDR) -e $(LOADADDR) \
 		   -n 'Linux-$(KERNELRELEASE)' -d $< $@
 
 ifeq ($(CONFIG_ZBOOT_ROM),y)
@@ -69,8 +69,6 @@ $(obj)/uImage: LOADADDR=$(CONFIG_ZBOOT_ROM_TEXT)
 else
 $(obj)/uImage: LOADADDR=$(ZRELADDR)
 endif
-
-$(obj)/uImage: STARTADDR=$(LOADADDR)
 
 $(obj)/uImage:	$(obj)/zImage FORCE
 	$(call if_changed,uimage)
@@ -98,10 +96,6 @@ install: $(obj)/Image
 zinstall: $(obj)/zImage
 	$(CONFIG_SHELL) $(srctree)/$(src)/install.sh $(KERNELRELEASE) \
 	$(obj)/zImage System.map "$(INSTALL_PATH)"
-
-uinstall: $(obj)/uImage
-	$(CONFIG_SHELL) $(srctree)/$(src)/install.sh $(KERNELRELEASE) \
-	$(obj)/uImage System.map "$(INSTALL_PATH)"
 
 zi:
 	$(CONFIG_SHELL) $(srctree)/$(src)/install.sh $(KERNELRELEASE) \

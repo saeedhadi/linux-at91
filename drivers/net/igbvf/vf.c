@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel(R) 82576 Virtual Function Linux driver
-  Copyright(c) 2009 - 2010 Intel Corporation.
+  Copyright(c) 2009 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -220,7 +220,7 @@ static u32 e1000_hash_mc_addr_vf(struct e1000_hw *hw, u8 *mc_addr)
  *  The parameter rar_count will usually be hw->mac.rar_entry_count
  *  unless there are workarounds that change this.
  **/
-static void e1000_update_mc_addr_list_vf(struct e1000_hw *hw,
+void e1000_update_mc_addr_list_vf(struct e1000_hw *hw,
                                   u8 *mc_addr_list, u32 mc_addr_count,
                                   u32 rar_used_count, u32 rar_count)
 {
@@ -274,8 +274,6 @@ static s32 e1000_set_vfta_vf(struct e1000_hw *hw, u16 vid, bool set)
 
 	err = mbx->ops.read_posted(hw, msgbuf, 2);
 
-	msgbuf[0] &= ~E1000_VT_MSGTYPE_CTS;
-
 	/* if nacked the vlan was rejected */
 	if (!err && (msgbuf[0] == (E1000_VF_SET_VLAN | E1000_VT_MSGTYPE_NACK)))
 		err = -E1000_ERR_MAC_INIT;
@@ -319,8 +317,6 @@ static void e1000_rar_set_vf(struct e1000_hw *hw, u8 * addr, u32 index)
 	if (!ret_val)
 		ret_val = mbx->ops.read_posted(hw, msgbuf, 3);
 
-	msgbuf[0] &= ~E1000_VT_MSGTYPE_CTS;
-
 	/* if nacked the address was rejected, use "perm_addr" */
 	if (!ret_val &&
 	    (msgbuf[0] == (E1000_VF_SET_MAC_ADDR | E1000_VT_MSGTYPE_NACK)))
@@ -362,8 +358,8 @@ static s32 e1000_check_for_link_vf(struct e1000_hw *hw)
 	 * or a virtual function reset
 	 */
 
-	/* If we were hit with a reset or timeout drop the link */
-	if (!mbx->ops.check_for_rst(hw) || !mbx->timeout)
+	/* If we were hit with a reset drop the link */
+	if (!mbx->ops.check_for_rst(hw))
 		mac->get_link_status = true;
 
 	if (!mac->get_link_status)

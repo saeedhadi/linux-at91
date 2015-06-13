@@ -10,7 +10,6 @@
 #include <linux/interrupt.h>
 #include <linux/kernel_stat.h>
 #include <linux/param.h>
-#include <linux/smp.h>
 #include <linux/time.h>
 #include <linux/timex.h>
 #include <linux/mm.h>
@@ -36,18 +35,21 @@
 #include <asm/sn/sn0/hubio.h>
 #include <asm/pci/bridge.h>
 
-static void enable_rt_irq(struct irq_data *d)
+static void enable_rt_irq(unsigned int irq)
 {
 }
 
-static void disable_rt_irq(struct irq_data *d)
+static void disable_rt_irq(unsigned int irq)
 {
 }
 
 static struct irq_chip rt_irq_type = {
 	.name		= "SN HUB RT timer",
-	.irq_mask	= disable_rt_irq,
-	.irq_unmask	= enable_rt_irq,
+	.ack		= disable_rt_irq,
+	.mask		= disable_rt_irq,
+	.mask_ack	= disable_rt_irq,
+	.unmask		= enable_rt_irq,
+	.eoi		= enable_rt_irq,
 };
 
 static int rt_next_event(unsigned long delta, struct clock_event_device *evt)
@@ -102,7 +104,7 @@ static irqreturn_t hub_rt_counter_handler(int irq, void *dev_id)
 
 struct irqaction hub_rt_irqaction = {
 	.handler	= hub_rt_counter_handler,
-	.flags		= IRQF_DISABLED | IRQF_PERCPU | IRQF_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_PERCPU,
 	.name		= "hub-rt",
 };
 
@@ -153,7 +155,7 @@ static void __init hub_rt_clock_event_global_init(void)
 			panic("Allocation of irq number for timer failed");
 	} while (xchg(&rt_timer_irq, irq));
 
-	irq_set_chip_and_handler(irq, &rt_irq_type, handle_percpu_irq);
+	set_irq_chip_and_handler(irq, &rt_irq_type, handle_percpu_irq);
 	setup_irq(irq, &hub_rt_irqaction);
 }
 

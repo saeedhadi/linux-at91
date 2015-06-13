@@ -9,7 +9,6 @@ config PPC_CELL_COMMON
 	select PPC_INDIRECT_IO
 	select PPC_NATIVE
 	select PPC_RTAS
-	select IRQ_EDGE_EOI_HANDLER
 
 config PPC_CELL_NATIVE
 	bool
@@ -80,6 +79,13 @@ config SPU_FS_64K_LS
 	  address spaces using 64K pages while the rest of the kernel
 	  uses 4K pages. This can improve performances of applications
 	  using multiple SPEs by lowering the TLB pressure on them.
+
+config SPU_TRACE
+	tristate "SPU event tracing support"
+	depends on SPU_FS && MARKERS
+	help
+	  This option allows reading a trace of spu-related events through
+	  the sputrace file in procfs.
 
 config SPU_BASE
 	bool

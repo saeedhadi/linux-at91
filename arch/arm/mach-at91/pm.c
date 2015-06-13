@@ -133,6 +133,7 @@ static int at91_pm_begin(suspend_state_t state)
  * Verify that all the clocks are correct before entering
  * slow-clock mode.
  */
+#warning "This should probably be moved to clocks.c"
 static int at91_pm_verify_clocks(void)
 {
 	unsigned long scsr;
@@ -179,20 +180,15 @@ static int at91_pm_verify_clocks(void)
 }
 
 /*
- * Call this from platform driver suspend() to see how deeply to suspend.
+ * This is called from clk_must_disable(), to see how deeply to suspend.
  * For example, some controllers (like OHCI) need one of the PLL clocks
  * in order to act as a wakeup source, and those are not available when
  * going into slow clock mode.
- *
- * REVISIT: generalize as clk_will_be_available(clk)?  Other platforms have
- * the very same problem (but not using at91 main_clk), and it'd be better
- * to add one generic API rather than lots of platform-specific ones.
  */
 int at91_suspend_entering_slow_clock(void)
 {
 	return (target_state == PM_SUSPEND_MEM);
 }
-EXPORT_SYMBOL(at91_suspend_entering_slow_clock);
 
 
 static void (*slow_clock)(void);
@@ -258,23 +254,16 @@ static int at91_pm_enter(suspend_state_t state)
 			 * NOTE: the Wait-for-Interrupt instruction needs to be
 			 * in icache so no SDRAM accesses are needed until the
 			 * wakeup IRQ occurs and self-refresh is terminated.
-			 * For ARM 926 based chips, this requirement is weaker
-			 * as at91sam9 can access a RAM in self-refresh mode.
 			 */
-			asm volatile (	"mov r0, #0\n\t"
-					"b 1f\n\t"
-					".align 5\n\t"
-					"1: mcr p15, 0, r0, c7, c10, 4\n\t"
-					: /* no output */
-					: /* no input */
-					: "r0");
+			asm("b 1f; .align 5; 1:");
+			asm("mcr p15, 0, r0, c7, c10, 4");	/* drain write buffer */
 			saved_lpr = sdram_selfrefresh_enable();
-			wait_for_interrupt_enable();
+			asm("mcr p15, 0, r0, c7, c0, 4");	/* wait for interrupt */
 			sdram_selfrefresh_disable(saved_lpr);
 			break;
 
 		case PM_SUSPEND_ON:
-			cpu_do_idle();
+			asm("mcr p15, 0, r0, c7, c0, 4");	/* wait for interrupt */
 			break;
 
 		default:
@@ -301,7 +290,7 @@ static void at91_pm_end(void)
 }
 
 
-static const struct platform_suspend_ops at91_pm_ops = {
+static struct platform_suspend_ops at91_pm_ops ={
 	.valid	= at91_pm_valid_state,
 	.begin	= at91_pm_begin,
 	.enter	= at91_pm_enter,

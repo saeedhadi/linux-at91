@@ -1,7 +1,7 @@
 /*
  *  Driver for NEC VR4100 series Real Time Clock unit.
  *
- *  Copyright (C) 2003-2008  Yoichi Yuasa <yuasa@linux-mips.org>
+ *  Copyright (C) 2003-2008  Yoichi Yuasa <yoichi_yuasa@tripeaks.co.jp>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -33,7 +33,7 @@
 #include <asm/io.h>
 #include <asm/uaccess.h>
 
-MODULE_AUTHOR("Yoichi Yuasa <yuasa@linux-mips.org>");
+MODULE_AUTHOR("Yoichi Yuasa <yoichi_yuasa@tripeaks.co.jp>");
 MODULE_DESCRIPTION("NEC VR4100 series RTC driver");
 MODULE_LICENSE("GPL v2");
 
@@ -207,9 +207,60 @@ static int vr41xx_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *wkalrm)
 	return 0;
 }
 
+static int vr41xx_rtc_irq_set_freq(struct device *dev, int freq)
+{
+	unsigned long count;
+
+	if (!is_power_of_2(freq))
+		return -EINVAL;
+	count = RTC_FREQUENCY;
+	do_div(count, freq);
+
+	periodic_count = count;
+
+	spin_lock_irq(&rtc_lock);
+
+	rtc1_write(RTCL1LREG, count);
+	rtc1_write(RTCL1HREG, count >> 16);
+
+	spin_unlock_irq(&rtc_lock);
+
+	return 0;
+}
+
+static int vr41xx_rtc_irq_set_state(struct device *dev, int enabled)
+{
+	if (enabled)
+		enable_irq(pie_irq);
+	else
+		disable_irq(pie_irq);
+
+	return 0;
+}
+
 static int vr41xx_rtc_ioctl(struct device *dev, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
+	case RTC_AIE_ON:
+		spin_lock_irq(&rtc_lock);
+
+		if (!alarm_enabled) {
+			enable_irq(aie_irq);
+			alarm_enabled = 1;
+		}
+
+		spin_unlock_irq(&rtc_lock);
+		break;
+	case RTC_AIE_OFF:
+		spin_lock_irq(&rtc_lock);
+
+		if (alarm_enabled) {
+			disable_irq(aie_irq);
+			alarm_enabled = 0;
+		}
+
+		spin_unlock_irq(&rtc_lock);
+		break;
 	case RTC_EPOCH_READ:
 		return put_user(epoch, (unsigned long __user *)arg);
 	case RTC_EPOCH_SET:
@@ -222,24 +273,6 @@ static int vr41xx_rtc_ioctl(struct device *dev, unsigned int cmd, unsigned long 
 		return -ENOIOCTLCMD;
 	}
 
-	return 0;
-}
-
-static int vr41xx_rtc_alarm_irq_enable(struct device *dev, unsigned int enabled)
-{
-	spin_lock_irq(&rtc_lock);
-	if (enabled) {
-		if (!alarm_enabled) {
-			enable_irq(aie_irq);
-			alarm_enabled = 1;
-		}
-	} else {
-		if (alarm_enabled) {
-			disable_irq(aie_irq);
-			alarm_enabled = 0;
-		}
-	}
-	spin_unlock_irq(&rtc_lock);
 	return 0;
 }
 
@@ -278,6 +311,8 @@ static const struct rtc_class_ops vr41xx_rtc_ops = {
 	.set_time	= vr41xx_rtc_set_time,
 	.read_alarm	= vr41xx_rtc_read_alarm,
 	.set_alarm	= vr41xx_rtc_set_alarm,
+	.irq_set_freq	= vr41xx_rtc_irq_set_freq,
+	.irq_set_state	= vr41xx_rtc_irq_set_state,
 };
 
 static int __devinit rtc_probe(struct platform_device *pdev)
@@ -293,7 +328,7 @@ static int __devinit rtc_probe(struct platform_device *pdev)
 	if (!res)
 		return -EBUSY;
 
-	rtc1_base = ioremap(res->start, resource_size(res));
+	rtc1_base = ioremap(res->start, res->end - res->start + 1);
 	if (!rtc1_base)
 		return -EBUSY;
 
@@ -303,7 +338,7 @@ static int __devinit rtc_probe(struct platform_device *pdev)
 		goto err_rtc1_iounmap;
 	}
 
-	rtc2_base = ioremap(res->start, resource_size(res));
+	rtc2_base = ioremap(res->start, res->end - res->start + 1);
 	if (!rtc2_base) {
 		retval = -EBUSY;
 		goto err_rtc1_iounmap;

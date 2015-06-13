@@ -26,9 +26,7 @@
 #define FLUSH_ALL (void*)0xffffffff
 
 /* Vector of locks used for various atomic operations */
-spinlock_t cris_atomic_locks[] = {
-	[0 ... LOCK_COUNT - 1] = __SPIN_LOCK_UNLOCKED(cris_atomic_locks)
-};
+spinlock_t cris_atomic_locks[] = { [0 ... LOCK_COUNT - 1] = SPIN_LOCK_UNLOCKED};
 
 /* CPU masks */
 cpumask_t phys_cpu_present_map = CPU_MASK_NONE;
@@ -53,6 +51,8 @@ static struct call_data_struct * call_data;
 static struct mm_struct* flush_mm;
 static struct vm_area_struct* flush_vma;
 static unsigned long flush_addr;
+
+extern int setup_irq(int, struct irqaction *);
 
 /* Mode registers */
 static unsigned long irq_regs[NR_CPUS] = {
@@ -170,8 +170,8 @@ void __init smp_callin(void)
 
 	/* Enable IRQ and idle */
 	REG_WR(intr_vect, irq_regs[cpu], rw_mask, vect_mask);
-	crisv32_unmask_irq(IPI_INTR_VECT);
-	crisv32_unmask_irq(TIMER0_INTR_VECT);
+	unmask_irq(IPI_INTR_VECT);
+	unmask_irq(TIMER0_INTR_VECT);
 	preempt_disable();
 	notify_cpu_starting(cpu);
 	local_irq_enable();

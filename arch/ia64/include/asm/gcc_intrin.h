@@ -388,7 +388,7 @@ register unsigned long ia64_r13 asm ("r13") __used;
 
 #define ia64_native_thash(addr)							\
 ({										\
-	unsigned long ia64_intri_res;						\
+	__u64 ia64_intri_res;							\
 	asm volatile ("thash %0=%1" : "=r"(ia64_intri_res) : "r" (addr));	\
 	ia64_intri_res;								\
 })
@@ -419,7 +419,7 @@ register unsigned long ia64_r13 asm ("r13") __used;
 
 #define ia64_tpa(addr)								\
 ({										\
-	unsigned long ia64_pa;							\
+	__u64 ia64_pa;								\
 	asm volatile ("tpa %0 = %1" : "=r"(ia64_pa) : "r"(addr) : "memory");	\
 	ia64_pa;								\
 })
@@ -444,35 +444,35 @@ register unsigned long ia64_r13 asm ("r13") __used;
 
 #define ia64_native_get_cpuid(index)							\
 ({											\
-	unsigned long ia64_intri_res;							\
+	__u64 ia64_intri_res;								\
 	asm volatile ("mov %0=cpuid[%r1]" : "=r"(ia64_intri_res) : "rO"(index));	\
 	ia64_intri_res;									\
 })
 
 #define __ia64_get_dbr(index)							\
 ({										\
-	unsigned long ia64_intri_res;						\
+	__u64 ia64_intri_res;							\
 	asm volatile ("mov %0=dbr[%1]" : "=r"(ia64_intri_res) : "r"(index));	\
 	ia64_intri_res;								\
 })
 
 #define ia64_get_ibr(index)							\
 ({										\
-	unsigned long ia64_intri_res;						\
+	__u64 ia64_intri_res;							\
 	asm volatile ("mov %0=ibr[%1]" : "=r"(ia64_intri_res) : "r"(index));	\
 	ia64_intri_res;								\
 })
 
 #define ia64_get_pkr(index)							\
 ({										\
-	unsigned long ia64_intri_res;						\
+	__u64 ia64_intri_res;							\
 	asm volatile ("mov %0=pkr[%1]" : "=r"(ia64_intri_res) : "r"(index));	\
 	ia64_intri_res;								\
 })
 
 #define ia64_get_pmc(index)							\
 ({										\
-	unsigned long ia64_intri_res;						\
+	__u64 ia64_intri_res;							\
 	asm volatile ("mov %0=pmc[%1]" : "=r"(ia64_intri_res) : "r"(index));	\
 	ia64_intri_res;								\
 })
@@ -480,14 +480,14 @@ register unsigned long ia64_r13 asm ("r13") __used;
 
 #define ia64_native_get_pmd(index)						\
 ({										\
-	unsigned long ia64_intri_res;						\
+	__u64 ia64_intri_res;							\
 	asm volatile ("mov %0=pmd[%1]" : "=r"(ia64_intri_res) : "r"(index));	\
 	ia64_intri_res;								\
 })
 
 #define ia64_native_get_rr(index)						\
 ({										\
-	unsigned long ia64_intri_res;						\
+	__u64 ia64_intri_res;							\
 	asm volatile ("mov %0=rr[%1]" : "=r"(ia64_intri_res) : "r" (index));	\
 	ia64_intri_res;								\
 })

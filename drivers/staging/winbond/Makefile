@@ -1,11 +1,13 @@
-w35und-y :=			\
+w35und-objs :=			\
 	mds.o			\
+	mlmetxrx.o		\
 	mto.o			\
 	phy_calibration.o	\
 	reg.o			\
 	wb35reg.o		\
 	wb35rx.o		\
 	wb35tx.o		\
+	wbhal.o			\
 	wbusb.o			\
 
 

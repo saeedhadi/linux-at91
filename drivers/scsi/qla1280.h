@@ -88,8 +88,7 @@
 
 /* Maximum outstanding commands in ISP queues */
 #define MAX_OUTSTANDING_COMMANDS	512
-#define COMPLETED_HANDLE		((unsigned char *) \
-					(MAX_OUTSTANDING_COMMANDS + 2))
+#define INVALID_HANDLE			(MAX_OUTSTANDING_COMMANDS + 2)
 
 /* ISP request and response entry counts (37-65535) */
 #define REQUEST_ENTRY_CNT		255 /* Number of request entries. */

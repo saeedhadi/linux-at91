@@ -179,7 +179,6 @@ static void mark_screen_rdonly(struct mm_struct *mm)
 	if (pud_none_or_clear_bad(pud))
 		goto out;
 	pmd = pmd_offset(pud, 0xA0000);
-	split_huge_page_pmd(mm, pmd);
 	if (pmd_none_or_clear_bad(pmd))
 		goto out;
 	pte = pte_offset_map_lock(mm, pmd, 0xA0000, &ptl);
@@ -198,8 +197,9 @@ out:
 static int do_vm86_irq_handling(int subfunction, int irqnumber);
 static void do_sys_vm86(struct kernel_vm86_struct *info, struct task_struct *tsk);
 
-int sys_vm86old(struct vm86_struct __user *v86, struct pt_regs *regs)
+int sys_vm86old(struct pt_regs *regs)
 {
+	struct vm86_struct __user *v86 = (struct vm86_struct __user *)regs->bx;
 	struct kernel_vm86_struct info; /* declare this _on top_,
 					 * this avoids wasting of stack space.
 					 * This remains on the stack until we
@@ -227,7 +227,7 @@ out:
 }
 
 
-int sys_vm86(unsigned long cmd, unsigned long arg, struct pt_regs *regs)
+int sys_vm86(struct pt_regs *regs)
 {
 	struct kernel_vm86_struct info; /* declare this _on top_,
 					 * this avoids wasting of stack space.
@@ -239,12 +239,12 @@ int sys_vm86(unsigned long cmd, unsigned long arg, struct pt_regs *regs)
 	struct vm86plus_struct __user *v86;
 
 	tsk = current;
-	switch (cmd) {
+	switch (regs->bx) {
 	case VM86_REQUEST_IRQ:
 	case VM86_FREE_IRQ:
 	case VM86_GET_IRQ_BITS:
 	case VM86_GET_AND_RESET_IRQ:
-		ret = do_vm86_irq_handling(cmd, (int)arg);
+		ret = do_vm86_irq_handling(regs->bx, (int)regs->cx);
 		goto out;
 	case VM86_PLUS_INSTALL_CHECK:
 		/*
@@ -261,7 +261,7 @@ int sys_vm86(unsigned long cmd, unsigned long arg, struct pt_regs *regs)
 	ret = -EPERM;
 	if (tsk->thread.saved_sp0)
 		goto out;
-	v86 = (struct vm86plus_struct __user *)arg;
+	v86 = (struct vm86plus_struct __user *)regs->cx;
 	tmp = copy_vm86_regs_from_user(&info.regs, &v86->regs,
 				       offsetof(struct kernel_vm86_struct, regs32) -
 				       sizeof(info.regs));
@@ -287,9 +287,10 @@ static void do_sys_vm86(struct kernel_vm86_struct *info, struct task_struct *tsk
 	info->regs.pt.ds = 0;
 	info->regs.pt.es = 0;
 	info->regs.pt.fs = 0;
-#ifndef CONFIG_X86_32_LAZY_GS
-	info->regs.pt.gs = 0;
-#endif
+
+/* we are clearing gs later just before "jmp resume_userspace",
+ * because it is not saved/restored.
+ */
 
 /*
  * The flags register is also special: we cannot trust that the user
@@ -317,9 +318,9 @@ static void do_sys_vm86(struct kernel_vm86_struct *info, struct task_struct *tsk
 	}
 
 /*
- * Save old state, set default return value (%ax) to 0 (VM86_SIGNAL)
+ * Save old state, set default return value (%ax) to 0
  */
-	info->regs32->ax = VM86_SIGNAL;
+	info->regs32->ax = 0;
 	tsk->thread.saved_sp0 = tsk->thread.sp0;
 	tsk->thread.saved_fs = info->regs32->fs;
 	tsk->thread.saved_gs = get_user_gs(info->regs32);
@@ -342,9 +343,7 @@ static void do_sys_vm86(struct kernel_vm86_struct *info, struct task_struct *tsk
 	__asm__ __volatile__(
 		"movl %0,%%esp\n\t"
 		"movl %1,%%ebp\n\t"
-#ifdef CONFIG_X86_32_LAZY_GS
 		"mov  %2, %%gs\n\t"
-#endif
 		"jmp resume_userspace"
 		: /* no outputs */
 		:"r" (&info->regs), "r" (task_thread_info(tsk)), "r" (0));
@@ -552,14 +551,8 @@ cannot_handle:
 int handle_vm86_trap(struct kernel_vm86_regs *regs, long error_code, int trapno)
 {
 	if (VMPI.is_vm86pus) {
-		if ((trapno == 3) || (trapno == 1)) {
-			KVM86->regs32->ax = VM86_TRAP + (trapno << 8);
-			/* setting this flag forces the code in entry_32.S to
-			   call save_v86_state() and change the stack pointer
-			   to KVM86->regs32 */
-			set_thread_flag(TIF_IRET);
-			return 0;
-		}
+		if ((trapno == 3) || (trapno == 1))
+			return_to_32bit(regs, VM86_TRAP + (trapno << 8));
 		do_int(regs, trapno, (unsigned char __user *) (regs->pt.ss << 4), SP(regs));
 		return 0;
 	}

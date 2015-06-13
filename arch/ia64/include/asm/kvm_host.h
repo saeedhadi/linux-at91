@@ -235,9 +235,7 @@ struct kvm_vm_data {
 #define KVM_REQ_PTC_G		32
 #define KVM_REQ_RESUME		33
 
-#define KVM_HPAGE_GFN_SHIFT(x)	0
-#define KVM_NR_PAGE_SIZES	1
-#define KVM_PAGES_PER_HPAGE(x)	1
+#define KVM_PAGES_PER_HPAGE	1
 
 struct kvm;
 struct kvm_vcpu;
@@ -373,7 +371,6 @@ struct kvm_vcpu_arch {
 	int last_run_cpu;
 	int vmm_tr_slot;
 	int vm_tr_slot;
-	int sn_rtc_tr_slot;
 
 #define KVM_MP_STATE_RUNNABLE          0
 #define KVM_MP_STATE_UNINITIALIZED     1
@@ -467,7 +464,7 @@ struct kvm_arch {
 	unsigned long	metaphysical_rr4;
 	unsigned long	vmm_init_rr;
 
-	int		is_sn2;
+	int		online_vcpus;
 
 	struct kvm_ioapic *vioapic;
 	struct kvm_vm_stat stat;
@@ -475,7 +472,7 @@ struct kvm_arch {
 
 	struct list_head assigned_dev_head;
 	struct iommu_domain *iommu_domain;
-	int iommu_flags;
+	struct hlist_head irq_ack_notifier_list;
 
 	unsigned long irq_sources_bitmap;
 	unsigned long irq_states[KVM_IOAPIC_NUM_PINS];
@@ -581,8 +578,6 @@ struct kvm_vmm_info{
 	kvm_vmm_entry 	*vmm_entry;
 	kvm_tramp_entry *tramp_entry;
 	unsigned long 	vmm_ivt;
-	unsigned long	patch_mov_ar;
-	unsigned long	patch_mov_ar_sn2;
 };
 
 int kvm_highest_pending_irq(struct kvm_vcpu *vcpu);
@@ -590,10 +585,7 @@ int kvm_emulate_halt(struct kvm_vcpu *vcpu);
 int kvm_pal_emul(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run);
 void kvm_sal_emul(struct kvm_vcpu *vcpu);
 
-#define __KVM_HAVE_ARCH_VM_ALLOC 1
-struct kvm *kvm_arch_alloc_vm(void);
-void kvm_arch_free_vm(struct kvm *kvm);
-
+static inline void kvm_inject_nmi(struct kvm_vcpu *vcpu) {}
 #endif /* __ASSEMBLY__*/
 
 #endif

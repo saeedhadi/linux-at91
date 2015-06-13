@@ -130,8 +130,8 @@ static int full_duplex[MAX_UNITS];
 static const char version[] __devinitconst =
   KERN_INFO DRV_NAME " dp8381x driver, version "
       DRV_VERSION ", " DRV_RELDATE "\n"
-  "  originally by Donald Becker <becker@scyld.com>\n"
-  "  2.4.x kernel port by Jeff Garzik, Tjeerd Mulder\n";
+  KERN_INFO "  originally by Donald Becker <becker@scyld.com>\n"
+  KERN_INFO "  2.4.x kernel port by Jeff Garzik, Tjeerd Mulder\n";
 
 MODULE_AUTHOR("Donald Becker <becker@scyld.com>");
 MODULE_DESCRIPTION("National Semiconductor DP8381x series PCI Ethernet driver");
@@ -203,7 +203,7 @@ skbuff at an offset of "+2", 16-byte aligning the IP header.
 IIId. Synchronization
 
 Most operations are synchronized on the np->lock irq spinlock, except the
-receive and transmit paths which are synchronised using a combination of
+recieve and transmit paths which are synchronised using a combination of
 hardware descriptor ownership, disabling interrupts and NAPI poll scheduling.
 
 IVb. References
@@ -247,7 +247,7 @@ static struct {
 	{ "NatSemi DP8381[56]", 0, 24 },
 };
 
-static DEFINE_PCI_DEVICE_TABLE(natsemi_pci_tbl) = {
+static struct pci_device_id natsemi_pci_tbl[] __devinitdata = {
 	{ PCI_VENDOR_ID_NS, 0x0020, 0x12d9,     0x000c,     0, 0, 0 },
 	{ PCI_VENDOR_ID_NS, 0x0020, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 1 },
 	{ }	/* terminate list */
@@ -548,6 +548,7 @@ struct netdev_private {
 	dma_addr_t tx_dma[TX_RING_SIZE];
 	struct net_device *dev;
 	struct napi_struct napi;
+	struct net_device_stats stats;
 	/* Media monitoring timer */
 	struct timer_list timer;
 	/* Frequently used values: keep some adjacent for cache effect */
@@ -620,7 +621,7 @@ static void drain_ring(struct net_device *dev);
 static void free_ring(struct net_device *dev);
 static void reinit_ring(struct net_device *dev);
 static void init_registers(struct net_device *dev);
-static netdev_tx_t start_tx(struct sk_buff *skb, struct net_device *dev);
+static int start_tx(struct sk_buff *skb, struct net_device *dev);
 static irqreturn_t intr_handler(int irq, void *dev_instance);
 static void netdev_error(struct net_device *dev, int intr_status);
 static int natsemi_poll(struct napi_struct *napi, int budget);
@@ -682,8 +683,8 @@ static ssize_t natsemi_set_dspcfg_workaround(struct device *dev,
         /* Find out the new setting */
         if (!strncmp("on", buf, count - 1) || !strncmp("1", buf, count - 1))
                 new_setting = 1;
-        else if (!strncmp("off", buf, count - 1) ||
-                 !strncmp("0", buf, count - 1))
+        else if (!strncmp("off", buf, count - 1)
+                 || !strncmp("0", buf, count - 1))
 		new_setting = 0;
 	else
                  return count;
@@ -726,7 +727,7 @@ static void move_int_phy(struct net_device *dev, int addr)
 	 * There are two addresses we must avoid:
 	 * - the address on the external phy that is used for transmission.
 	 * - the address that we want to access. User space can access phys
-	 *   on the mii bus with SIOCGMIIREG/SIOCSMIIREG, independent from the
+	 *   on the mii bus with SIOCGMIIREG/SIOCSMIIREG, independant from the
 	 *   phy that is used for transmission.
 	 */
 
@@ -756,8 +757,8 @@ static void __devinit natsemi_init_media (struct net_device *dev)
 	np->autoneg    = (tmp & BMCR_ANENABLE)? AUTONEG_ENABLE: AUTONEG_DISABLE;
 	np->advertising= mdio_read(dev, MII_ADVERTISE);
 
-	if ((np->advertising & ADVERTISE_ALL) != ADVERTISE_ALL &&
-	    netif_msg_probe(np)) {
+	if ((np->advertising & ADVERTISE_ALL) != ADVERTISE_ALL
+	 && netif_msg_probe(np)) {
 		printk(KERN_INFO "natsemi %s: Transceiver default autonegotiation %s "
 			"10%s %s duplex.\n",
 			pci_name(np->pci_dev),
@@ -859,9 +860,6 @@ static int __devinit natsemi_probe1 (struct pci_dev *pdev,
 		dev->dev_addr[i*2+1] = eedata >> 7;
 		prev_eedata = eedata;
 	}
-
-	/* Store MAC Address in perm_addr */
-	memcpy(dev->perm_addr, dev->dev_addr, ETH_ALEN);
 
 	dev->base_addr = (unsigned long __force) ioaddr;
 	dev->irq = irq;
@@ -1155,8 +1153,8 @@ static void init_phy_fixup(struct net_device *dev)
 	tmp = mdio_read(dev, MII_BMCR);
 	if (np->autoneg == AUTONEG_ENABLE) {
 		/* renegotiate if something changed */
-		if ((tmp & BMCR_ANENABLE) == 0 ||
-		    np->advertising != mdio_read(dev, MII_ADVERTISE))
+		if ((tmp & BMCR_ANENABLE) == 0
+		 || np->advertising != mdio_read(dev, MII_ADVERTISE))
 		{
 			/* turn on autonegotiation and force negotiation */
 			tmp |= (BMCR_ANENABLE | BMCR_ANRESTART);
@@ -1537,7 +1535,7 @@ static int netdev_open(struct net_device *dev)
 	/* Reset the chip, just in case. */
 	natsemi_reset(dev);
 
-	i = request_irq(dev->irq, intr_handler, IRQF_SHARED, dev->name, dev);
+	i = request_irq(dev->irq, &intr_handler, IRQF_SHARED, dev->name, dev);
 	if (i) return i;
 
 	if (netif_msg_ifup(np))
@@ -1573,7 +1571,7 @@ static int netdev_open(struct net_device *dev)
 	init_timer(&np->timer);
 	np->timer.expires = round_jiffies(jiffies + NATSEMI_TIMER_FREQ);
 	np->timer.data = (unsigned long)dev;
-	np->timer.function = netdev_timer; /* timer handler */
+	np->timer.function = &netdev_timer; /* timer handler */
 	add_timer(&np->timer);
 
 	return 0;
@@ -1907,8 +1905,8 @@ static void ns_tx_timeout(struct net_device *dev)
 	spin_unlock_irq(&np->lock);
 	enable_irq(dev->irq);
 
-	dev->trans_start = jiffies; /* prevent tx timeout */
-	dev->stats.tx_errors++;
+	dev->trans_start = jiffies;
+	np->stats.tx_errors++;
 	netif_wake_queue(dev);
 }
 
@@ -1985,7 +1983,7 @@ static void init_ring(struct net_device *dev)
 
 	np->rx_head_desc = &np->rx_ring[0];
 
-	/* Please be careful before changing this loop - at least gcc-2.95.1
+	/* Please be carefull before changing this loop - at least gcc-2.95.1
 	 * miscompiles it otherwise.
 	 */
 	/* Initialize all Rx descriptors. */
@@ -2011,7 +2009,7 @@ static void drain_tx(struct net_device *dev)
 				np->tx_dma[i], np->tx_skbuff[i]->len,
 				PCI_DMA_TODEVICE);
 			dev_kfree_skb(np->tx_skbuff[i]);
-			dev->stats.tx_dropped++;
+			np->stats.tx_dropped++;
 		}
 		np->tx_skbuff[i] = NULL;
 	}
@@ -2081,7 +2079,7 @@ static void reinit_ring(struct net_device *dev)
 	reinit_rx(dev);
 }
 
-static netdev_tx_t start_tx(struct sk_buff *skb, struct net_device *dev)
+static int start_tx(struct sk_buff *skb, struct net_device *dev)
 {
 	struct netdev_private *np = netdev_priv(dev);
 	void __iomem * ioaddr = ns_ioaddr(dev);
@@ -2117,15 +2115,17 @@ static netdev_tx_t start_tx(struct sk_buff *skb, struct net_device *dev)
 		writel(TxOn, ioaddr + ChipCmd);
 	} else {
 		dev_kfree_skb_irq(skb);
-		dev->stats.tx_dropped++;
+		np->stats.tx_dropped++;
 	}
 	spin_unlock_irqrestore(&np->lock, flags);
+
+	dev->trans_start = jiffies;
 
 	if (netif_msg_tx_queued(np)) {
 		printk(KERN_DEBUG "%s: Transmit frame #%d queued in slot %d.\n",
 			dev->name, np->cur_tx, entry);
 	}
-	return NETDEV_TX_OK;
+	return 0;
 }
 
 static void netdev_tx_done(struct net_device *dev)
@@ -2142,20 +2142,20 @@ static void netdev_tx_done(struct net_device *dev)
 					dev->name, np->dirty_tx,
 					le32_to_cpu(np->tx_ring[entry].cmd_status));
 		if (np->tx_ring[entry].cmd_status & cpu_to_le32(DescPktOK)) {
-			dev->stats.tx_packets++;
-			dev->stats.tx_bytes += np->tx_skbuff[entry]->len;
+			np->stats.tx_packets++;
+			np->stats.tx_bytes += np->tx_skbuff[entry]->len;
 		} else { /* Various Tx errors */
 			int tx_status =
 				le32_to_cpu(np->tx_ring[entry].cmd_status);
 			if (tx_status & (DescTxAbort|DescTxExcColl))
-				dev->stats.tx_aborted_errors++;
+				np->stats.tx_aborted_errors++;
 			if (tx_status & DescTxFIFO)
-				dev->stats.tx_fifo_errors++;
+				np->stats.tx_fifo_errors++;
 			if (tx_status & DescTxCarrier)
-				dev->stats.tx_carrier_errors++;
+				np->stats.tx_carrier_errors++;
 			if (tx_status & DescTxOOWCol)
-				dev->stats.tx_window_errors++;
-			dev->stats.tx_errors++;
+				np->stats.tx_window_errors++;
+			np->stats.tx_errors++;
 		}
 		pci_unmap_single(np->pci_dev,np->tx_dma[entry],
 					np->tx_skbuff[entry]->len,
@@ -2164,8 +2164,8 @@ static void netdev_tx_done(struct net_device *dev)
 		dev_kfree_skb_irq(np->tx_skbuff[entry]);
 		np->tx_skbuff[entry] = NULL;
 	}
-	if (netif_queue_stopped(dev) &&
-	    np->cur_tx - np->dirty_tx < TX_QUEUE_LEN - 4) {
+	if (netif_queue_stopped(dev)
+		&& np->cur_tx - np->dirty_tx < TX_QUEUE_LEN - 4) {
 		/* The ring is no longer full, wake queue. */
 		netif_wake_queue(dev);
 	}
@@ -2303,7 +2303,7 @@ static void netdev_rx(struct net_device *dev, int *work_done, int work_to_do)
 						"buffers, entry %#08x "
 						"status %#08x.\n", dev->name,
 						np->cur_rx, desc_status);
-				dev->stats.rx_length_errors++;
+				np->stats.rx_length_errors++;
 
 				/* The RX state machine has probably
 				 * locked up beneath us.  Follow the
@@ -2323,15 +2323,15 @@ static void netdev_rx(struct net_device *dev, int *work_done, int work_to_do)
 
 			} else {
 				/* There was an error. */
-				dev->stats.rx_errors++;
+				np->stats.rx_errors++;
 				if (desc_status & (DescRxAbort|DescRxOver))
-					dev->stats.rx_over_errors++;
+					np->stats.rx_over_errors++;
 				if (desc_status & (DescRxLong|DescRxRunt))
-					dev->stats.rx_length_errors++;
+					np->stats.rx_length_errors++;
 				if (desc_status & (DescRxInvalid|DescRxAlign))
-					dev->stats.rx_frame_errors++;
+					np->stats.rx_frame_errors++;
 				if (desc_status & DescRxCRC)
-					dev->stats.rx_crc_errors++;
+					np->stats.rx_crc_errors++;
 			}
 		} else if (pkt_len > np->rx_buf_sz) {
 			/* if this is the tail of a double buffer
@@ -2343,8 +2343,8 @@ static void netdev_rx(struct net_device *dev, int *work_done, int work_to_do)
 			/* Omit CRC size. */
 			/* Check if the packet is long enough to accept
 			 * without copying to a minimally-sized skbuff. */
-			if (pkt_len < rx_copybreak &&
-			    (skb = dev_alloc_skb(pkt_len + RX_OFFSET)) != NULL) {
+			if (pkt_len < rx_copybreak
+			    && (skb = dev_alloc_skb(pkt_len + RX_OFFSET)) != NULL) {
 				/* 16 byte align the IP header */
 				skb_reserve(skb, RX_OFFSET);
 				pci_dma_sync_single_for_cpu(np->pci_dev,
@@ -2366,8 +2366,8 @@ static void netdev_rx(struct net_device *dev, int *work_done, int work_to_do)
 			}
 			skb->protocol = eth_type_trans(skb, dev);
 			netif_receive_skb(skb);
-			dev->stats.rx_packets++;
-			dev->stats.rx_bytes += pkt_len;
+			np->stats.rx_packets++;
+			np->stats.rx_bytes += pkt_len;
 		}
 		entry = (++np->cur_rx) % RX_RING_SIZE;
 		np->rx_head_desc = &np->rx_ring[entry];
@@ -2390,8 +2390,8 @@ static void netdev_error(struct net_device *dev, int intr_status)
 	spin_lock(&np->lock);
 	if (intr_status & LinkChange) {
 		u16 lpa = mdio_read(dev, MII_LPA);
-		if (mdio_read(dev, MII_BMCR) & BMCR_ANENABLE &&
-		    netif_msg_link(np)) {
+		if (mdio_read(dev, MII_BMCR) & BMCR_ANENABLE
+		 && netif_msg_link(np)) {
 			printk(KERN_INFO
 				"%s: Autonegotiation advertising"
 				" %#04x  partner %#04x.\n", dev->name,
@@ -2430,17 +2430,17 @@ static void netdev_error(struct net_device *dev, int intr_status)
 			printk(KERN_NOTICE "%s: Rx status FIFO overrun\n",
 				dev->name);
 		}
-		dev->stats.rx_fifo_errors++;
-		dev->stats.rx_errors++;
+		np->stats.rx_fifo_errors++;
+		np->stats.rx_errors++;
 	}
 	/* Hmmmmm, it's not clear how to recover from PCI faults. */
 	if (intr_status & IntrPCIErr) {
 		printk(KERN_NOTICE "%s: PCI error %#08x\n", dev->name,
 			intr_status & IntrPCIErr);
-		dev->stats.tx_fifo_errors++;
-		dev->stats.tx_errors++;
-		dev->stats.rx_fifo_errors++;
-		dev->stats.rx_errors++;
+		np->stats.tx_fifo_errors++;
+		np->stats.tx_errors++;
+		np->stats.rx_fifo_errors++;
+		np->stats.rx_errors++;
 	}
 	spin_unlock(&np->lock);
 }
@@ -2448,10 +2448,11 @@ static void netdev_error(struct net_device *dev, int intr_status)
 static void __get_stats(struct net_device *dev)
 {
 	void __iomem * ioaddr = ns_ioaddr(dev);
+	struct netdev_private *np = netdev_priv(dev);
 
 	/* The chip only need report frame silently dropped. */
-	dev->stats.rx_crc_errors += readl(ioaddr + RxCRCErrs);
-	dev->stats.rx_missed_errors += readl(ioaddr + RxMissed);
+	np->stats.rx_crc_errors	+= readl(ioaddr + RxCRCErrs);
+	np->stats.rx_missed_errors += readl(ioaddr + RxMissed);
 }
 
 static struct net_device_stats *get_stats(struct net_device *dev)
@@ -2464,7 +2465,7 @@ static struct net_device_stats *get_stats(struct net_device *dev)
 		__get_stats(dev);
 	spin_unlock_irq(&np->lock);
 
-	return &dev->stats;
+	return &np->stats;
 }
 
 #ifdef CONFIG_NET_POLL_CONTROLLER
@@ -2487,17 +2488,17 @@ static void __set_rx_mode(struct net_device *dev)
 	if (dev->flags & IFF_PROMISC) { /* Set promiscuous. */
 		rx_mode = RxFilterEnable | AcceptBroadcast
 			| AcceptAllMulticast | AcceptAllPhys | AcceptMyPhys;
-	} else if ((netdev_mc_count(dev) > multicast_filter_limit) ||
-		   (dev->flags & IFF_ALLMULTI)) {
+	} else if ((dev->mc_count > multicast_filter_limit)
+	  || (dev->flags & IFF_ALLMULTI)) {
 		rx_mode = RxFilterEnable | AcceptBroadcast
 			| AcceptAllMulticast | AcceptMyPhys;
 	} else {
-		struct netdev_hw_addr *ha;
+		struct dev_mc_list *mclist;
 		int i;
-
 		memset(mc_filter, 0, sizeof(mc_filter));
-		netdev_for_each_mc_addr(ha, dev) {
-			int b = (ether_crc(ETH_ALEN, ha->addr) >> 23) & 0x1ff;
+		for (i = 0, mclist = dev->mc_list; mclist && i < dev->mc_count;
+			 i++, mclist = mclist->next) {
+			int b = (ether_crc(ETH_ALEN, mclist->dmi_addr) >> 23) & 0x1ff;
 			mc_filter[b/8] |= (1 << (b & 0x07));
 		}
 		rx_mode = RxFilterEnable | AcceptBroadcast
@@ -3052,10 +3053,12 @@ static int netdev_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 
 	switch(cmd) {
 	case SIOCGMIIPHY:		/* Get address of MII PHY in use. */
+	case SIOCDEVPRIVATE:		/* for binary compat, remove in 2.5 */
 		data->phy_id = np->phy_addr_external;
 		/* Fall Through */
 
 	case SIOCGMIIREG:		/* Read MII PHY register. */
+	case SIOCDEVPRIVATE+1:		/* for binary compat, remove in 2.5 */
 		/* The phy_id is not enough to uniquely identify
 		 * the intended target. Therefore the command is sent to
 		 * the given mii on the current port.
@@ -3074,6 +3077,9 @@ static int netdev_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 		return 0;
 
 	case SIOCSMIIREG:		/* Write MII PHY register. */
+	case SIOCDEVPRIVATE+2:		/* for binary compat, remove in 2.5 */
+		if (!capable(CAP_NET_ADMIN))
+			return -EPERM;
 		if (dev->if_port == PORT_TP) {
 			if ((data->phy_id & 0x1f) == np->phy_addr_external) {
  				if ((data->reg_num & 0x1f) == MII_ADVERTISE)

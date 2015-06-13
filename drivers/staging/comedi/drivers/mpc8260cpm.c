@@ -46,38 +46,23 @@ struct mpc8260cpm_private {
 
 #define devpriv ((struct mpc8260cpm_private *)dev->private)
 
-static int mpc8260cpm_attach(struct comedi_device *dev,
-			     struct comedi_devconfig *it);
-static int mpc8260cpm_detach(struct comedi_device *dev);
+static int mpc8260cpm_attach(struct comedi_device * dev, struct comedi_devconfig * it);
+static int mpc8260cpm_detach(struct comedi_device * dev);
 static struct comedi_driver driver_mpc8260cpm = {
-	.driver_name = "mpc8260cpm",
-	.module = THIS_MODULE,
-	.attach = mpc8260cpm_attach,
-	.detach = mpc8260cpm_detach,
+      driver_name:"mpc8260cpm",
+      module:THIS_MODULE,
+      attach:mpc8260cpm_attach,
+      detach:mpc8260cpm_detach,
 };
 
-static int __init driver_mpc8260cpm_init_module(void)
-{
-	return comedi_driver_register(&driver_mpc8260cpm);
-}
+COMEDI_INITCLEANUP(driver_mpc8260cpm);
 
-static void __exit driver_mpc8260cpm_cleanup_module(void)
-{
-	comedi_driver_unregister(&driver_mpc8260cpm);
-}
+static int mpc8260cpm_dio_config(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data);
+static int mpc8260cpm_dio_bits(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data);
 
-module_init(driver_mpc8260cpm_init_module);
-module_exit(driver_mpc8260cpm_cleanup_module);
-
-static int mpc8260cpm_dio_config(struct comedi_device *dev,
-				 struct comedi_subdevice *s,
-				 struct comedi_insn *insn, unsigned int *data);
-static int mpc8260cpm_dio_bits(struct comedi_device *dev,
-			       struct comedi_subdevice *s,
-			       struct comedi_insn *insn, unsigned int *data);
-
-static int mpc8260cpm_attach(struct comedi_device *dev,
-			     struct comedi_devconfig *it)
+static int mpc8260cpm_attach(struct comedi_device * dev, struct comedi_devconfig * it)
 {
 	struct comedi_subdevice *s;
 	int i;
@@ -108,7 +93,7 @@ static int mpc8260cpm_attach(struct comedi_device *dev,
 	return 1;
 }
 
-static int mpc8260cpm_detach(struct comedi_device *dev)
+static int mpc8260cpm_detach(struct comedi_device * dev)
 {
 	printk("comedi%d: mpc8260cpm: remove\n", dev->minor);
 
@@ -129,9 +114,8 @@ static unsigned long *cpm_pdat(int port)
 	}
 }
 
-static int mpc8260cpm_dio_config(struct comedi_device *dev,
-				 struct comedi_subdevice *s,
-				 struct comedi_insn *insn, unsigned int *data)
+static int mpc8260cpm_dio_config(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data)
 {
 	int n;
 	unsigned int d;
@@ -173,9 +157,8 @@ static int mpc8260cpm_dio_config(struct comedi_device *dev,
 	return 1;
 }
 
-static int mpc8260cpm_dio_bits(struct comedi_device *dev,
-			       struct comedi_subdevice *s,
-			       struct comedi_insn *insn, unsigned int *data)
+static int mpc8260cpm_dio_bits(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data)
 {
 	int port;
 	unsigned long *p;

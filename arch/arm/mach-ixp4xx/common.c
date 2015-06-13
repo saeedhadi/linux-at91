@@ -21,6 +21,7 @@
 #include <linux/tty.h>
 #include <linux/platform_device.h>
 #include <linux/serial_core.h>
+#include <linux/bootmem.h>
 #include <linux/interrupt.h>
 #include <linux/bitops.h>
 #include <linux/time.h>
@@ -35,14 +36,13 @@
 #include <asm/pgtable.h>
 #include <asm/page.h>
 #include <asm/irq.h>
-#include <asm/sched_clock.h>
 
 #include <asm/mach/map.h>
 #include <asm/mach/irq.h>
 #include <asm/mach/time.h>
 
-static void __init ixp4xx_clocksource_init(void);
-static void __init ixp4xx_clockevent_init(void);
+static int __init ixp4xx_clocksource_init(void);
+static int __init ixp4xx_clockevent_init(void);
 static struct clock_event_device clockevent_ixp4xx;
 
 /*************************************************************************
@@ -117,7 +117,7 @@ int gpio_to_irq(int gpio)
 }
 EXPORT_SYMBOL(gpio_to_irq);
 
-int irq_to_gpio(unsigned int irq)
+int irq_to_gpio(int irq)
 {
 	int gpio = (irq < 32) ? irq2gpio[irq] : -EINVAL;
 
@@ -128,9 +128,9 @@ int irq_to_gpio(unsigned int irq)
 }
 EXPORT_SYMBOL(irq_to_gpio);
 
-static int ixp4xx_set_irq_type(struct irq_data *d, unsigned int type)
+static int ixp4xx_set_irq_type(unsigned int irq, unsigned int type)
 {
-	int line = irq2gpio[d->irq];
+	int line = irq2gpio[irq];
 	u32 int_style;
 	enum ixp4xx_irq_type irq_type;
 	volatile u32 *int_reg;
@@ -167,9 +167,9 @@ static int ixp4xx_set_irq_type(struct irq_data *d, unsigned int type)
 	}
 
 	if (irq_type == IXP4XX_IRQ_EDGE)
-		ixp4xx_irq_edge |= (1 << d->irq);
+		ixp4xx_irq_edge |= (1 << irq);
 	else
-		ixp4xx_irq_edge &= ~(1 << d->irq);
+		ixp4xx_irq_edge &= ~(1 << irq);
 
 	if (line >= 8) {	/* pins 8-15 */
 		line -= 8;
@@ -188,22 +188,22 @@ static int ixp4xx_set_irq_type(struct irq_data *d, unsigned int type)
 	*int_reg |= (int_style << (line * IXP4XX_GPIO_STYLE_SIZE));
 
 	/* Configure the line as an input */
-	gpio_line_config(irq2gpio[d->irq], IXP4XX_GPIO_IN);
+	gpio_line_config(irq2gpio[irq], IXP4XX_GPIO_IN);
 
 	return 0;
 }
 
-static void ixp4xx_irq_mask(struct irq_data *d)
+static void ixp4xx_irq_mask(unsigned int irq)
 {
-	if ((cpu_is_ixp46x() || cpu_is_ixp43x()) && d->irq >= 32)
-		*IXP4XX_ICMR2 &= ~(1 << (d->irq - 32));
+	if ((cpu_is_ixp46x() || cpu_is_ixp43x()) && irq >= 32)
+		*IXP4XX_ICMR2 &= ~(1 << (irq - 32));
 	else
-		*IXP4XX_ICMR &= ~(1 << d->irq);
+		*IXP4XX_ICMR &= ~(1 << irq);
 }
 
-static void ixp4xx_irq_ack(struct irq_data *d)
+static void ixp4xx_irq_ack(unsigned int irq)
 {
-	int line = (d->irq < 32) ? irq2gpio[d->irq] : -1;
+	int line = (irq < 32) ? irq2gpio[irq] : -1;
 
 	if (line >= 0)
 		*IXP4XX_GPIO_GPISR = (1 << line);
@@ -213,23 +213,23 @@ static void ixp4xx_irq_ack(struct irq_data *d)
  * Level triggered interrupts on GPIO lines can only be cleared when the
  * interrupt condition disappears.
  */
-static void ixp4xx_irq_unmask(struct irq_data *d)
+static void ixp4xx_irq_unmask(unsigned int irq)
 {
-	if (!(ixp4xx_irq_edge & (1 << d->irq)))
-		ixp4xx_irq_ack(d);
+	if (!(ixp4xx_irq_edge & (1 << irq)))
+		ixp4xx_irq_ack(irq);
 
-	if ((cpu_is_ixp46x() || cpu_is_ixp43x()) && d->irq >= 32)
-		*IXP4XX_ICMR2 |= (1 << (d->irq - 32));
+	if ((cpu_is_ixp46x() || cpu_is_ixp43x()) && irq >= 32)
+		*IXP4XX_ICMR2 |= (1 << (irq - 32));
 	else
-		*IXP4XX_ICMR |= (1 << d->irq);
+		*IXP4XX_ICMR |= (1 << irq);
 }
 
 static struct irq_chip ixp4xx_irq_chip = {
 	.name		= "IXP4xx",
-	.irq_ack	= ixp4xx_irq_ack,
-	.irq_mask	= ixp4xx_irq_mask,
-	.irq_unmask	= ixp4xx_irq_unmask,
-	.irq_set_type	= ixp4xx_set_irq_type,
+	.ack		= ixp4xx_irq_ack,
+	.mask		= ixp4xx_irq_mask,
+	.unmask		= ixp4xx_irq_unmask,
+	.set_type	= ixp4xx_set_irq_type,
 };
 
 void __init ixp4xx_init_irq(void)
@@ -252,8 +252,8 @@ void __init ixp4xx_init_irq(void)
 
         /* Default to all level triggered */
 	for(i = 0; i < NR_IRQS; i++) {
-		irq_set_chip_and_handler(i, &ixp4xx_irq_chip,
-					 handle_level_irq);
+		set_irq_chip(i, &ixp4xx_irq_chip);
+		set_irq_handler(i, handle_level_irq);
 		set_irq_flags(i, IRQF_VALID);
 	}
 }
@@ -267,7 +267,7 @@ void __init ixp4xx_init_irq(void)
 
 static irqreturn_t ixp4xx_timer_interrupt(int irq, void *dev_id)
 {
-	struct clock_event_device *evt = dev_id;
+	struct clock_event_device *evt = &clockevent_ixp4xx;
 
 	/* Clear Pending Interrupt by writing '1' to it */
 	*IXP4XX_OSST = IXP4XX_OSST_TIMER_1_PEND;
@@ -281,7 +281,6 @@ static struct irqaction ixp4xx_timer_irq = {
 	.name		= "timer1",
 	.flags		= IRQF_DISABLED | IRQF_TIMER | IRQF_IRQPOLL,
 	.handler	= ixp4xx_timer_interrupt,
-	.dev_id		= &clockevent_ixp4xx,
 };
 
 void __init ixp4xx_timer_init(void)
@@ -400,26 +399,9 @@ void __init ixp4xx_sys_init(void)
 }
 
 /*
- * sched_clock()
- */
-static DEFINE_CLOCK_DATA(cd);
-
-unsigned long long notrace sched_clock(void)
-{
-	u32 cyc = *IXP4XX_OSTS;
-	return cyc_to_sched_clock(&cd, cyc, (u32)~0);
-}
-
-static void notrace ixp4xx_update_sched_clock(void)
-{
-	u32 cyc = *IXP4XX_OSTS;
-	update_sched_clock(&cd, cyc, (u32)~0);
-}
-
-/*
  * clocksource
  */
-static cycle_t ixp4xx_get_cycles(struct clocksource *cs)
+cycle_t ixp4xx_get_cycles(struct clocksource *cs)
 {
 	return *IXP4XX_OSTS;
 }
@@ -429,16 +411,19 @@ static struct clocksource clocksource_ixp4xx = {
 	.rating		= 200,
 	.read		= ixp4xx_get_cycles,
 	.mask		= CLOCKSOURCE_MASK(32),
+	.shift 		= 20,
 	.flags		= CLOCK_SOURCE_IS_CONTINUOUS,
 };
 
-unsigned long ixp4xx_timer_freq = IXP4XX_TIMER_FREQ;
-EXPORT_SYMBOL(ixp4xx_timer_freq);
-static void __init ixp4xx_clocksource_init(void)
+unsigned long ixp4xx_timer_freq = FREQ;
+static int __init ixp4xx_clocksource_init(void)
 {
-	init_sched_clock(&cd, ixp4xx_update_sched_clock, 32, ixp4xx_timer_freq);
+	clocksource_ixp4xx.mult =
+		clocksource_hz2mult(ixp4xx_timer_freq,
+				    clocksource_ixp4xx.shift);
+	clocksource_register(&clocksource_ixp4xx);
 
-	clocksource_register_hz(&clocksource_ixp4xx, ixp4xx_timer_freq);
+	return 0;
 }
 
 /*
@@ -494,9 +479,9 @@ static struct clock_event_device clockevent_ixp4xx = {
 	.set_next_event	= ixp4xx_set_next_event,
 };
 
-static void __init ixp4xx_clockevent_init(void)
+static int __init ixp4xx_clockevent_init(void)
 {
-	clockevent_ixp4xx.mult = div_sc(IXP4XX_TIMER_FREQ, NSEC_PER_SEC,
+	clockevent_ixp4xx.mult = div_sc(FREQ, NSEC_PER_SEC,
 					clockevent_ixp4xx.shift);
 	clockevent_ixp4xx.max_delta_ns =
 		clockevent_delta2ns(0xfffffffe, &clockevent_ixp4xx);
@@ -505,4 +490,5 @@ static void __init ixp4xx_clockevent_init(void)
 	clockevent_ixp4xx.cpumask = cpumask_of(0);
 
 	clockevents_register_device(&clockevent_ixp4xx);
+	return 0;
 }

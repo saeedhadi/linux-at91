@@ -2,17 +2,15 @@
  *  drivers/s390/char/tape_3590.c
  *    tape device discipline for 3590 tapes.
  *
- *    Copyright IBM Corp. 2001, 2009
+ *    Copyright IBM Corp. 2001,2006
  *    Author(s): Stefan Bader <shbader@de.ibm.com>
  *		 Michael Holzheu <holzheu@de.ibm.com>
  *		 Martin Schwidefsky <schwidefsky@de.ibm.com>
  */
 
-#define KMSG_COMPONENT "tape_3590"
-#define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
+#define KMSG_COMPONENT "tape"
 
 #include <linux/module.h>
-#include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/bio.h>
 #include <asm/ebcdic.h>
@@ -24,8 +22,6 @@
 #include "tape_std.h"
 #include "tape_3590.h"
 
-static struct workqueue_struct *tape_3590_wq;
-
 /*
  * Pointer to debug area.
  */
@@ -33,7 +29,7 @@ debug_info_t *TAPE_DBF_AREA = NULL;
 EXPORT_SYMBOL(TAPE_DBF_AREA);
 
 /*******************************************************************
- * Error Recovery functions:
+ * Error Recovery fuctions:
  * - Read Opposite:		 implemented
  * - Read Device (buffered) log: BRA
  * - Read Library log:		 BRA
@@ -42,6 +38,8 @@ EXPORT_SYMBOL(TAPE_DBF_AREA);
  * - Special Intercept:		 BRA
  * - Read Alternate:		 implemented
  *******************************************************************/
+
+#define KMSG_COMPONENT "tape"
 
 static const char *tape_3590_msg[TAPE_3590_MAX_MSG] = {
 	[0x00] = "",
@@ -140,7 +138,7 @@ static void int_to_ext_kekl(struct tape3592_kekl *in,
 		out->type_on_tape = TAPE390_KEKL_TYPE_LABEL;
 	memcpy(out->label, in->label, sizeof(in->label));
 	EBCASC(out->label, sizeof(in->label));
-	strim(out->label);
+	strstrip(out->label);
 }
 
 static void int_to_ext_kekl_pair(struct tape3592_kekl_pair *in,
@@ -329,17 +327,17 @@ out:
 /*
  * Enable encryption
  */
-static struct tape_request *__tape_3592_enable_crypt(struct tape_device *device)
+static int tape_3592_enable_crypt(struct tape_device *device)
 {
 	struct tape_request *request;
 	char *data;
 
 	DBF_EVENT(6, "tape_3592_enable_crypt\n");
 	if (!crypt_supported(device))
-		return ERR_PTR(-ENOSYS);
+		return -ENOSYS;
 	request = tape_alloc_request(2, 72);
 	if (IS_ERR(request))
-		return request;
+		return PTR_ERR(request);
 	data = request->cpdata;
 	memset(data,0,72);
 
@@ -354,42 +352,23 @@ static struct tape_request *__tape_3592_enable_crypt(struct tape_device *device)
 	request->op = TO_CRYPT_ON;
 	tape_ccw_cc(request->cpaddr, MODE_SET_CB, 36, data);
 	tape_ccw_end(request->cpaddr + 1, MODE_SET_CB, 36, data + 36);
-	return request;
-}
-
-static int tape_3592_enable_crypt(struct tape_device *device)
-{
-	struct tape_request *request;
-
-	request = __tape_3592_enable_crypt(device);
-	if (IS_ERR(request))
-		return PTR_ERR(request);
 	return tape_do_io_free(device, request);
-}
-
-static void tape_3592_enable_crypt_async(struct tape_device *device)
-{
-	struct tape_request *request;
-
-	request = __tape_3592_enable_crypt(device);
-	if (!IS_ERR(request))
-		tape_do_io_async_free(device, request);
 }
 
 /*
  * Disable encryption
  */
-static struct tape_request *__tape_3592_disable_crypt(struct tape_device *device)
+static int tape_3592_disable_crypt(struct tape_device *device)
 {
 	struct tape_request *request;
 	char *data;
 
 	DBF_EVENT(6, "tape_3592_disable_crypt\n");
 	if (!crypt_supported(device))
-		return ERR_PTR(-ENOSYS);
+		return -ENOSYS;
 	request = tape_alloc_request(2, 72);
 	if (IS_ERR(request))
-		return request;
+		return PTR_ERR(request);
 	data = request->cpdata;
 	memset(data,0,72);
 
@@ -402,26 +381,7 @@ static struct tape_request *__tape_3592_disable_crypt(struct tape_device *device
 	tape_ccw_cc(request->cpaddr, MODE_SET_CB, 36, data);
 	tape_ccw_end(request->cpaddr + 1, MODE_SET_CB, 36, data + 36);
 
-	return request;
-}
-
-static int tape_3592_disable_crypt(struct tape_device *device)
-{
-	struct tape_request *request;
-
-	request = __tape_3592_disable_crypt(device);
-	if (IS_ERR(request))
-		return PTR_ERR(request);
 	return tape_do_io_free(device, request);
-}
-
-static void tape_3592_disable_crypt_async(struct tape_device *device)
-{
-	struct tape_request *request;
-
-	request = __tape_3592_disable_crypt(device);
-	if (!IS_ERR(request))
-		tape_do_io_async_free(device, request);
 }
 
 /*
@@ -495,7 +455,8 @@ tape_3590_ioctl(struct tape_device *device, unsigned int cmd, unsigned long arg)
 /*
  * SENSE Medium: Get Sense data about medium state
  */
-static int tape_3590_sense_medium(struct tape_device *device)
+static int
+tape_3590_sense_medium(struct tape_device *device)
 {
 	struct tape_request *request;
 
@@ -505,18 +466,6 @@ static int tape_3590_sense_medium(struct tape_device *device)
 	request->op = TO_MSEN;
 	tape_ccw_end(request->cpaddr, MEDIUM_SENSE, 128, request->cpdata);
 	return tape_do_io_free(device, request);
-}
-
-static void tape_3590_sense_medium_async(struct tape_device *device)
-{
-	struct tape_request *request;
-
-	request = tape_alloc_request(1, 128);
-	if (IS_ERR(request))
-		return;
-	request->op = TO_MSEN;
-	tape_ccw_end(request->cpaddr, MEDIUM_SENSE, 128, request->cpdata);
-	tape_do_io_async_free(device, request);
 }
 
 /*
@@ -595,14 +544,15 @@ tape_3590_read_opposite(struct tape_device *device,
  * 2. The attention msg is written to the "read subsystem data" buffer.
  * In this case we probably should print it to the console.
  */
-static void tape_3590_read_attmsg_async(struct tape_device *device)
+static int
+tape_3590_read_attmsg(struct tape_device *device)
 {
 	struct tape_request *request;
 	char *buf;
 
 	request = tape_alloc_request(3, 4096);
 	if (IS_ERR(request))
-		return;
+		return PTR_ERR(request);
 	request->op = TO_READ_ATTMSG;
 	buf = request->cpdata;
 	buf[0] = PREP_RD_SS_DATA;
@@ -610,15 +560,12 @@ static void tape_3590_read_attmsg_async(struct tape_device *device)
 	tape_ccw_cc(request->cpaddr, PERFORM_SS_FUNC, 12, buf);
 	tape_ccw_cc(request->cpaddr + 1, READ_SS_DATA, 4096 - 12, buf + 12);
 	tape_ccw_end(request->cpaddr + 2, NOP, 0, NULL);
-	tape_do_io_async_free(device, request);
+	return tape_do_io_free(device, request);
 }
 
 /*
  * These functions are used to schedule follow-up actions from within an
  * interrupt context (like unsolicited interrupts).
- * Note: the work handler is called by the system work queue. The tape
- * commands started by the handler need to be asynchrounous, otherwise
- * a deadlock can occur e.g. in case of a deferred cc=1 (see __tape_do_irq).
  */
 struct work_handler_data {
 	struct tape_device *device;
@@ -634,16 +581,16 @@ tape_3590_work_handler(struct work_struct *work)
 
 	switch (p->op) {
 	case TO_MSEN:
-		tape_3590_sense_medium_async(p->device);
+		tape_3590_sense_medium(p->device);
 		break;
 	case TO_READ_ATTMSG:
-		tape_3590_read_attmsg_async(p->device);
+		tape_3590_read_attmsg(p->device);
 		break;
 	case TO_CRYPT_ON:
-		tape_3592_enable_crypt_async(p->device);
+		tape_3592_enable_crypt(p->device);
 		break;
 	case TO_CRYPT_OFF:
-		tape_3592_disable_crypt_async(p->device);
+		tape_3592_disable_crypt(p->device);
 		break;
 	default:
 		DBF_EVENT(3, "T3590: work handler undefined for "
@@ -663,10 +610,10 @@ tape_3590_schedule_work(struct tape_device *device, enum tape_op op)
 
 	INIT_WORK(&p->work, tape_3590_work_handler);
 
-	p->device = tape_get_device(device);
+	p->device = tape_get_device_reference(device);
 	p->op = op;
 
-	queue_work(tape_3590_wq, &p->work);
+	schedule_work(&p->work);
 	return 0;
 }
 
@@ -686,7 +633,7 @@ tape_3590_bread(struct tape_device *device, struct request *req)
 	struct req_iterator iter;
 
 	DBF_EVENT(6, "xBREDid:");
-	start_block = blk_rq_pos(req) >> TAPEBLOCK_HSEC_S2B;
+	start_block = req->sector >> TAPEBLOCK_HSEC_S2B;
 	DBF_EVENT(6, "start_block = %i\n", start_block);
 
 	rq_for_each_segment(bv, req, iter)
@@ -851,7 +798,7 @@ tape_3590_done(struct tape_device *device, struct tape_request *request)
 }
 
 /*
- * This function is called, when error recovery was successful
+ * This fuction is called, when error recovery was successfull
  */
 static inline int
 tape_3590_erp_succeded(struct tape_device *device, struct tape_request *request)
@@ -862,7 +809,7 @@ tape_3590_erp_succeded(struct tape_device *device, struct tape_request *request)
 }
 
 /*
- * This function is called, when error recovery was not successful
+ * This fuction is called, when error recovery was not successfull
  */
 static inline int
 tape_3590_erp_failed(struct tape_device *device, struct tape_request *request,
@@ -1682,7 +1629,7 @@ fail_kmalloc:
 static void
 tape_3590_cleanup_device(struct tape_device *device)
 {
-	flush_workqueue(tape_3590_wq);
+	flush_scheduled_work();
 	tape_std_unassign(device);
 
 	kfree(device->discdata);
@@ -1756,21 +1703,18 @@ static struct ccw_device_id tape_3590_ids[] = {
 static int
 tape_3590_online(struct ccw_device *cdev)
 {
-	return tape_generic_online(dev_get_drvdata(&cdev->dev),
+	return tape_generic_online(cdev->dev.driver_data,
 				   &tape_discipline_3590);
 }
 
 static struct ccw_driver tape_3590_driver = {
-	.driver = {
-		.name = "tape_3590",
-		.owner = THIS_MODULE,
-	},
+	.name = "tape_3590",
+	.owner = THIS_MODULE,
 	.ids = tape_3590_ids,
 	.probe = tape_generic_probe,
 	.remove = tape_generic_remove,
 	.set_offline = tape_generic_offline,
 	.set_online = tape_3590_online,
-	.freeze = tape_generic_pm_suspend,
 };
 
 /*
@@ -1788,17 +1732,11 @@ tape_3590_init(void)
 #endif
 
 	DBF_EVENT(3, "3590 init\n");
-
-	tape_3590_wq = alloc_workqueue("tape_3590", 0, 0);
-	if (!tape_3590_wq)
-		return -ENOMEM;
-
 	/* Register driver for 3590 tapes. */
 	rc = ccw_driver_register(&tape_3590_driver);
-	if (rc) {
-		destroy_workqueue(tape_3590_wq);
+	if (rc)
 		DBF_EVENT(3, "3590 init failed\n");
-	} else
+	else
 		DBF_EVENT(3, "3590 registered\n");
 	return rc;
 }
@@ -1807,7 +1745,7 @@ static void
 tape_3590_exit(void)
 {
 	ccw_driver_unregister(&tape_3590_driver);
-	destroy_workqueue(tape_3590_wq);
+
 	debug_unregister(TAPE_DBF_AREA);
 }
 

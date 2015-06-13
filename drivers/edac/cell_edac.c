@@ -47,7 +47,7 @@ static void cell_edac_count_ce(struct mem_ctl_info *mci, int chan, u64 ar)
 	offset = address & ~PAGE_MASK;
 	syndrome = (ar & 0x000000001fe00000ul) >> 21;
 
-	/* TODO: Decoding of the error address */
+	/* TODO: Decoding of the error addresss */
 	edac_mc_handle_ce(mci, csrow->first_page + pfn, offset,
 			  syndrome, 0, chan, "");
 }
@@ -68,7 +68,7 @@ static void cell_edac_count_ue(struct mem_ctl_info *mci, int chan, u64 ar)
 	pfn = address >> PAGE_SHIFT;
 	offset = address & ~PAGE_MASK;
 
-	/* TODO: Decoding of the error address */
+	/* TODO: Decoding of the error addresss */
 	edac_mc_handle_ue(mci, csrow->first_page + pfn, offset, 0, "");
 }
 
@@ -227,7 +227,7 @@ static struct platform_driver cell_edac_driver = {
 		.owner	= THIS_MODULE,
 	},
 	.probe		= cell_edac_probe,
-	.remove		= __devexit_p(cell_edac_remove),
+	.remove		= cell_edac_remove,
 };
 
 static int __init cell_edac_init(void)

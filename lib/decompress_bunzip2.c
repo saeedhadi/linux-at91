@@ -45,13 +45,12 @@
 */
 
 
-#ifdef STATIC
-#define PREBOOT
-#else
+#ifndef STATIC
 #include <linux/decompress/bunzip2.h>
-#endif /* STATIC */
+#endif /* !STATIC */
 
 #include <linux/decompress/mm.h>
+#include <linux/slab.h>
 
 #ifndef INT_MAX
 #define INT_MAX 0x7fffffff
@@ -106,8 +105,6 @@ struct bunzip_data {
 	unsigned char selectors[32768];		/* nSelectors = 15 bits */
 	struct group_data groups[MAX_GROUPS];	/* Huffman coding tables */
 	int io_error;			/* non-zero if we have IO error */
-	int byteCount[256];
-	unsigned char symToByte[256], mtfSymbol[256];
 };
 
 
@@ -159,16 +156,14 @@ static int INIT get_next_block(struct bunzip_data *bd)
 	int *base = NULL;
 	int *limit = NULL;
 	int dbufCount, nextSym, dbufSize, groupCount, selector,
-		i, j, k, t, runPos, symCount, symTotal, nSelectors, *byteCount;
-	unsigned char uc, *symToByte, *mtfSymbol, *selectors;
+		i, j, k, t, runPos, symCount, symTotal, nSelectors,
+		byteCount[256];
+	unsigned char uc, symToByte[256], mtfSymbol[256], *selectors;
 	unsigned int *dbuf, origPtr;
 
 	dbuf = bd->dbuf;
 	dbufSize = bd->dbufSize;
 	selectors = bd->selectors;
-	byteCount = bd->byteCount;
-	symToByte = bd->symToByte;
-	mtfSymbol = bd->mtfSymbol;
 
 	/* Read in header signature and CRC, then validate signature.
 	   (last block signature means CRC is for whole file, return now) */
@@ -302,7 +297,7 @@ static int INIT get_next_block(struct bunzip_data *bd)
 		   again when using them (during symbol decoding).*/
 		base = hufGroup->base-1;
 		limit = hufGroup->limit-1;
-		/* Calculate permute[].  Concurrently, initialize
+		/* Calculate permute[].  Concurently, initialize
 		 * temp[] and limit[]. */
 		pp = 0;
 		for (i = minLen; i <= maxLen; i++) {
@@ -640,8 +635,6 @@ static int INIT start_bunzip(struct bunzip_data **bdp, void *inbuf, int len,
 
 	/* Allocate bunzip_data.  Most fields initialize to zero. */
 	bd = *bdp = malloc(i);
-	if (!bd)
-		return RETVAL_OUT_OF_MEMORY;
 	memset(bd, 0, sizeof(struct bunzip_data));
 	/* Setup input buffer */
 	bd->inbuf = inbuf;
@@ -669,8 +662,6 @@ static int INIT start_bunzip(struct bunzip_data **bdp, void *inbuf, int len,
 	bd->dbufSize = 100000*(i-BZh0);
 
 	bd->dbuf = large_malloc(bd->dbufSize * sizeof(int));
-	if (!bd->dbuf)
-		return RETVAL_OUT_OF_MEMORY;
 	return RETVAL_OK;
 }
 
@@ -681,18 +672,21 @@ STATIC int INIT bunzip2(unsigned char *buf, int len,
 			int(*flush)(void*, unsigned int),
 			unsigned char *outbuf,
 			int *pos,
-			void(*error)(char *x))
+			void(*error_fn)(char *x))
 {
 	struct bunzip_data *bd;
 	int i = -1;
 	unsigned char *inbuf;
 
+	set_error_fn(error_fn);
 	if (flush)
 		outbuf = malloc(BZIP2_IOBUF_SIZE);
-
+	else
+		len -= 4; /* Uncompressed size hack active in pre-boot
+			     environment */
 	if (!outbuf) {
 		error("Could not allocate output bufer");
-		return RETVAL_OUT_OF_MEMORY;
+		return -1;
 	}
 	if (buf)
 		inbuf = buf;
@@ -700,7 +694,6 @@ STATIC int INIT bunzip2(unsigned char *buf, int len,
 		inbuf = malloc(BZIP2_IOBUF_SIZE);
 	if (!inbuf) {
 		error("Could not allocate input bufer");
-		i = RETVAL_OUT_OF_MEMORY;
 		goto exit_0;
 	}
 	i = start_bunzip(&bd, inbuf, len, fill);
@@ -727,14 +720,11 @@ STATIC int INIT bunzip2(unsigned char *buf, int len,
 	} else if (i == RETVAL_UNEXPECTED_OUTPUT_EOF) {
 		error("Compressed file ends unexpectedly");
 	}
-	if (!bd)
-		goto exit_1;
 	if (bd->dbuf)
 		large_free(bd->dbuf);
 	if (pos)
 		*pos = bd->inbufPos;
 	free(bd);
-exit_1:
 	if (!buf)
 		free(inbuf);
 exit_0:
@@ -743,14 +733,4 @@ exit_0:
 	return i;
 }
 
-#ifdef PREBOOT
-STATIC int INIT decompress(unsigned char *buf, int len,
-			int(*fill)(void*, unsigned int),
-			int(*flush)(void*, unsigned int),
-			unsigned char *outbuf,
-			int *pos,
-			void(*error)(char *x))
-{
-	return bunzip2(buf, len - 4, fill, flush, outbuf, pos, error);
-}
-#endif
+#define decompress bunzip2

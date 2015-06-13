@@ -7,16 +7,13 @@
 #include <linux/init.h>
 #include <linux/irq.h>
 
-#include <linux/irq_work.h>
-#include <linux/ftrace.h>
-
 #include <asm/pil.h>
 #include <asm/pcr.h>
 #include <asm/nmi.h>
 
 /* This code is shared between various users of the performance
  * counters.  Users will be oprofile, pseudo-NMI watchdog, and the
- * perf_event support layer.
+ * perf_counter support layer.
  */
 
 #define PCR_SUN4U_ENABLE	(PCR_PIC_PRIV | PCR_STRACE | PCR_UTRACE)
@@ -35,22 +32,12 @@ unsigned int picl_shift;
  * Therefore in such situations we defer the work by signalling
  * a lower level cpu IRQ.
  */
-void __irq_entry deferred_pcr_work_irq(int irq, struct pt_regs *regs)
+void deferred_pcr_work_irq(int irq, struct pt_regs *regs)
 {
-	struct pt_regs *old_regs;
-
 	clear_softint(1 << PIL_DEFERRED_PCR_WORK);
-
-	old_regs = set_irq_regs(regs);
-	irq_enter();
-#ifdef CONFIG_IRQ_WORK
-	irq_work_run();
-#endif
-	irq_exit();
-	set_irq_regs(old_regs);
 }
 
-void arch_irq_work_raise(void)
+void schedule_deferred_pcr_work(void)
 {
 	set_softint(1 << PIL_DEFERRED_PCR_WORK);
 }
@@ -81,7 +68,7 @@ static void n2_pcr_write(u64 val)
 	unsigned long ret;
 
 	ret = sun4v_niagara2_setperf(HV_N2_PERF_SPARC_CTL, val);
-	if (ret != HV_EOK)
+	if (val != HV_EOK)
 		write_pcr(val);
 }
 
@@ -167,3 +154,5 @@ out_unregister:
 	unregister_perf_hsvc();
 	return err;
 }
+
+arch_initcall(pcr_arch_init);

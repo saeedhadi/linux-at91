@@ -90,11 +90,15 @@ ENTRY(cpu_xsc3_proc_init)
  * cpu_xsc3_proc_fin()
  */
 ENTRY(cpu_xsc3_proc_fin)
+	str	lr, [sp, #-4]!
+	mov	r0, #PSR_F_BIT|PSR_I_BIT|SVC_MODE
+	msr	cpsr_c, r0
+	bl	xsc3_flush_kern_cache_all	@ clean caches
 	mrc	p15, 0, r0, c1, c0, 0		@ ctrl register
 	bic	r0, r0, #0x1800			@ ...IZ...........
 	bic	r0, r0, #0x0006			@ .............CA.
 	mcr	p15, 0, r0, c1, c0, 0		@ disable caches
-	mov	pc, lr
+	ldr	pc, [sp], #4
 
 /*
  * cpu_xsc3_reset(loc)
@@ -139,17 +143,6 @@ ENTRY(cpu_xsc3_do_idle)
 	mov	pc, lr
 
 /* ================================= CACHE ================================ */
-
-/*
- *	flush_icache_all()
- *
- *	Unconditionally clean and invalidate the entire icache.
- */
-ENTRY(xsc3_flush_icache_all)
-	mov	r0, #0
-	mcr	p15, 0, r0, c7, c5, 0		@ invalidate I cache
-	mov	pc, lr
-ENDPROC(xsc3_flush_icache_all)
 
 /*
  *	flush_user_cache_all()
@@ -233,16 +226,15 @@ ENTRY(xsc3_coherent_user_range)
 	mov	pc, lr
 
 /*
- *	flush_kern_dcache_area(void *addr, size_t size)
+ *	flush_kern_dcache_page(void *page)
  *
  *	Ensure no D cache aliasing occurs, either with itself or
  *	the I cache.
  *
- *	- addr	- kernel address
- *	- size	- region size
+ *	- addr	- page aligned address
  */
-ENTRY(xsc3_flush_kern_dcache_area)
-	add	r1, r0, r1
+ENTRY(xsc3_flush_kern_dcache_page)
+	add	r1, r0, #PAGE_SZ
 1:	mcr	p15, 0, r0, c7, c14, 1		@ clean/invalidate L1 D line
 	add	r0, r0, #CACHELINESIZE
 	cmp	r0, r1
@@ -264,7 +256,7 @@ ENTRY(xsc3_flush_kern_dcache_area)
  *	- start  - virtual start address
  *	- end	 - virtual end address
  */
-xsc3_dma_inv_range:
+ENTRY(xsc3_dma_inv_range)
 	tst	r0, #CACHELINESIZE - 1
 	bic	r0, r0, #CACHELINESIZE - 1
 	mcrne	p15, 0, r0, c7, c10, 1		@ clean L1 D line
@@ -285,7 +277,7 @@ xsc3_dma_inv_range:
  *	- start  - virtual start address
  *	- end	 - virtual end address
  */
-xsc3_dma_clean_range:
+ENTRY(xsc3_dma_clean_range)
 	bic	r0, r0, #CACHELINESIZE - 1
 1:	mcr	p15, 0, r0, c7, c10, 1		@ clean L1 D line
 	add	r0, r0, #CACHELINESIZE
@@ -311,40 +303,15 @@ ENTRY(xsc3_dma_flush_range)
 	mcr	p15, 0, r0, c7, c10, 4		@ data write barrier
 	mov	pc, lr
 
-/*
- *	dma_map_area(start, size, dir)
- *	- start	- kernel virtual start address
- *	- size	- size of region
- *	- dir	- DMA direction
- */
-ENTRY(xsc3_dma_map_area)
-	add	r1, r1, r0
-	cmp	r2, #DMA_TO_DEVICE
-	beq	xsc3_dma_clean_range
-	bcs	xsc3_dma_inv_range
-	b	xsc3_dma_flush_range
-ENDPROC(xsc3_dma_map_area)
-
-/*
- *	dma_unmap_area(start, size, dir)
- *	- start	- kernel virtual start address
- *	- size	- size of region
- *	- dir	- DMA direction
- */
-ENTRY(xsc3_dma_unmap_area)
-	mov	pc, lr
-ENDPROC(xsc3_dma_unmap_area)
-
 ENTRY(xsc3_cache_fns)
-	.long	xsc3_flush_icache_all
 	.long	xsc3_flush_kern_cache_all
 	.long	xsc3_flush_user_cache_all
 	.long	xsc3_flush_user_cache_range
 	.long	xsc3_coherent_kern_range
 	.long	xsc3_coherent_user_range
-	.long	xsc3_flush_kern_dcache_area
-	.long	xsc3_dma_map_area
-	.long	xsc3_dma_unmap_area
+	.long	xsc3_flush_kern_dcache_page
+	.long	xsc3_dma_inv_range
+	.long	xsc3_dma_clean_range
 	.long	xsc3_dma_flush_range
 
 ENTRY(cpu_xsc3_dcache_clean_area)
@@ -413,53 +380,10 @@ ENTRY(cpu_xsc3_set_pte_ext)
 	mov	pc, lr
 
 	.ltorg
+
 	.align
 
-.globl	cpu_xsc3_suspend_size
-.equ	cpu_xsc3_suspend_size, 4 * 8
-#ifdef CONFIG_PM_SLEEP
-ENTRY(cpu_xsc3_do_suspend)
-	stmfd	sp!, {r4 - r10, lr}
-	mrc	p14, 0, r4, c6, c0, 0	@ clock configuration, for turbo mode
-	mrc	p15, 0, r5, c15, c1, 0	@ CP access reg
-	mrc	p15, 0, r6, c13, c0, 0	@ PID
-	mrc 	p15, 0, r7, c3, c0, 0	@ domain ID
-	mrc 	p15, 0, r8, c2, c0, 0	@ translation table base addr
-	mrc	p15, 0, r9, c1, c0, 1	@ auxiliary control reg
-	mrc 	p15, 0, r10, c1, c0, 0	@ control reg
-	bic	r4, r4, #2		@ clear frequency change bit
-	stmia	r0, {r1, r4 - r10}	@ store v:p offset + cp regs
-	ldmia	sp!, {r4 - r10, pc}
-ENDPROC(cpu_xsc3_do_suspend)
-
-ENTRY(cpu_xsc3_do_resume)
-	ldmia	r0, {r1, r4 - r10}	@ load v:p offset + cp regs
-	mov	ip, #0
-	mcr	p15, 0, ip, c7, c7, 0	@ invalidate I & D caches, BTB
-	mcr	p15, 0, ip, c7, c10, 4	@ drain write (&fill) buffer
-	mcr	p15, 0, ip, c7, c5, 4	@ flush prefetch buffer
-	mcr	p15, 0, ip, c8, c7, 0	@ invalidate I & D TLBs
-	mcr	p14, 0, r4, c6, c0, 0	@ clock configuration, turbo mode.
-	mcr	p15, 0, r5, c15, c1, 0	@ CP access reg
-	mcr	p15, 0, r6, c13, c0, 0	@ PID
-	mcr	p15, 0, r7, c3, c0, 0	@ domain ID
-	mcr	p15, 0, r8, c2, c0, 0	@ translation table base addr
-	mcr	p15, 0, r9, c1, c0, 1	@ auxiliary control reg
-
-	@ temporarily map resume_turn_on_mmu into the page table,
-	@ otherwise prefetch abort occurs after MMU is turned on
-	mov	r0, r10			@ control register
-	mov	r2, r8, lsr #14		@ get TTB0 base
-	mov	r2, r2, lsl #14
-	ldr	r3, =0x542e		@ section flags
-	b	cpu_resume_mmu
-ENDPROC(cpu_xsc3_do_resume)
-#else
-#define cpu_xsc3_do_suspend	0
-#define cpu_xsc3_do_resume	0
-#endif
-
-	__CPUINIT
+	__INIT
 
 	.type	__xsc3_setup, #function
 __xsc3_setup:
@@ -472,7 +396,7 @@ __xsc3_setup:
 	orr	r4, r4, #0x18			@ cache the page table in L2
 	mcr	p15, 0, r4, c2, c0, 0		@ load page table pointer
 
-	mov	r0, #1 << 6			@ cp6 access for early sched_clock
+	mov	r0, #0				@ don't allow CP access
 	mcr	p15, 0, r0, c15, c1, 0		@ write CP access register
 
 	mrc	p15, 0, r0, c1, c0, 1		@ get auxiliary control reg
@@ -482,13 +406,6 @@ __xsc3_setup:
 
 	adr	r5, xsc3_crval
 	ldmia	r5, {r5, r6}
-
-#ifdef CONFIG_CACHE_XSC3L2
-	mrc	p15, 1, r0, c0, c0, 1		@ get L2 present information
-	ands	r0, r0, #0xf8
-	orrne	r6, r6, #(1 << 26)		@ enable L2 if present
-#endif
-
 	mrc	p15, 0, r0, c1, c0, 0		@ get control register
 	bic	r0, r0, r5			@ ..V. ..R. .... ..A.
 	orr	r0, r0, r6			@ ..VI Z..S .... .C.M (mmu)
@@ -511,7 +428,7 @@ xsc3_crval:
 	.type	xsc3_processor_functions, #object
 ENTRY(xsc3_processor_functions)
 	.word	v5t_early_abort
-	.word	legacy_pabort
+	.word	pabort_noifar
 	.word	cpu_xsc3_proc_init
 	.word	cpu_xsc3_proc_fin
 	.word	cpu_xsc3_reset
@@ -519,9 +436,6 @@ ENTRY(xsc3_processor_functions)
 	.word	cpu_xsc3_dcache_clean_area
 	.word	cpu_xsc3_switch_mm
 	.word	cpu_xsc3_set_pte_ext
-	.word	cpu_xsc3_suspend_size
-	.word	cpu_xsc3_do_suspend
-	.word	cpu_xsc3_do_resume
 	.size	xsc3_processor_functions, . - xsc3_processor_functions
 
 	.section ".rodata"

@@ -35,7 +35,6 @@ Configuration Options:
 */
 
 #include "../comedidev.h"
-#include <linux/kernel.h>
 #include <linux/delay.h>
 #include "comedi_fc.h"
 #include "comedi_pci.h"
@@ -57,10 +56,9 @@ Configuration Options:
 #define PCI_DEVICE_ID_PCI8164 0x8164
 
 static DEFINE_PCI_DEVICE_TABLE(adl_pci8164_pci_table) = {
-	{
-	PCI_VENDOR_ID_ADLINK, PCI_DEVICE_ID_PCI8164, PCI_ANY_ID,
-		    PCI_ANY_ID, 0, 0, 0}, {
-	0}
+	{PCI_VENDOR_ID_ADLINK, PCI_DEVICE_ID_PCI8164, PCI_ANY_ID, PCI_ANY_ID, 0,
+		0, 0},
+	{0}
 };
 
 MODULE_DEVICE_TABLE(pci, adl_pci8164_pci_table);
@@ -72,65 +70,47 @@ struct adl_pci8164_private {
 
 #define devpriv ((struct adl_pci8164_private *)dev->private)
 
-static int adl_pci8164_attach(struct comedi_device *dev,
-			      struct comedi_devconfig *it);
-static int adl_pci8164_detach(struct comedi_device *dev);
+static int adl_pci8164_attach(struct comedi_device * dev, struct comedi_devconfig * it);
+static int adl_pci8164_detach(struct comedi_device * dev);
 static struct comedi_driver driver_adl_pci8164 = {
-	.driver_name = "adl_pci8164",
-	.module = THIS_MODULE,
-	.attach = adl_pci8164_attach,
-	.detach = adl_pci8164_detach,
+      driver_name:"adl_pci8164",
+      module:THIS_MODULE,
+      attach:adl_pci8164_attach,
+      detach:adl_pci8164_detach,
 };
 
-static int adl_pci8164_insn_read_msts(struct comedi_device *dev,
-				      struct comedi_subdevice *s,
-				      struct comedi_insn *insn,
-				      unsigned int *data);
+static int adl_pci8164_insn_read_msts(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data);
 
-static int adl_pci8164_insn_read_ssts(struct comedi_device *dev,
-				      struct comedi_subdevice *s,
-				      struct comedi_insn *insn,
-				      unsigned int *data);
+static int adl_pci8164_insn_read_ssts(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data);
 
-static int adl_pci8164_insn_read_buf0(struct comedi_device *dev,
-				      struct comedi_subdevice *s,
-				      struct comedi_insn *insn,
-				      unsigned int *data);
+static int adl_pci8164_insn_read_buf0(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data);
 
-static int adl_pci8164_insn_read_buf1(struct comedi_device *dev,
-				      struct comedi_subdevice *s,
-				      struct comedi_insn *insn,
-				      unsigned int *data);
+static int adl_pci8164_insn_read_buf1(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data);
 
-static int adl_pci8164_insn_write_cmd(struct comedi_device *dev,
-				      struct comedi_subdevice *s,
-				      struct comedi_insn *insn,
-				      unsigned int *data);
+static int adl_pci8164_insn_write_cmd(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data);
 
-static int adl_pci8164_insn_write_otp(struct comedi_device *dev,
-				      struct comedi_subdevice *s,
-				      struct comedi_insn *insn,
-				      unsigned int *data);
+static int adl_pci8164_insn_write_otp(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data);
 
-static int adl_pci8164_insn_write_buf0(struct comedi_device *dev,
-				       struct comedi_subdevice *s,
-				       struct comedi_insn *insn,
-				       unsigned int *data);
+static int adl_pci8164_insn_write_buf0(struct comedi_device * dev,
+	struct comedi_subdevice * s, struct comedi_insn * insn, unsigned int * data);
 
-static int adl_pci8164_insn_write_buf1(struct comedi_device *dev,
-				       struct comedi_subdevice *s,
-				       struct comedi_insn *insn,
-				       unsigned int *data);
+static int adl_pci8164_insn_write_buf1(struct comedi_device * dev,
+	struct comedi_subdevice * s, struct comedi_insn * insn, unsigned int * data);
 
-static int adl_pci8164_attach(struct comedi_device *dev,
-			      struct comedi_devconfig *it)
+static int adl_pci8164_attach(struct comedi_device * dev, struct comedi_devconfig * it)
 {
-	struct pci_dev *pcidev = NULL;
+	struct pci_dev *pcidev;
 	struct comedi_subdevice *s;
 	int bus, slot;
 
-	printk(KERN_INFO "comedi: attempt to attach...\n");
-	printk(KERN_INFO "comedi%d: adl_pci8164\n", dev->minor);
+	printk("comedi: attempt to attach...\n");
+	printk("comedi%d: adl_pci8164\n", dev->minor);
 
 	dev->board_name = "pci8164";
 	bus = it->options[0];
@@ -142,24 +122,26 @@ static int adl_pci8164_attach(struct comedi_device *dev,
 	if (alloc_subdevices(dev, 4) < 0)
 		return -ENOMEM;
 
-	for_each_pci_dev(pcidev) {
+	for (pcidev = pci_get_device(PCI_ANY_ID, PCI_ANY_ID, NULL);
+		pcidev != NULL;
+		pcidev = pci_get_device(PCI_ANY_ID, PCI_ANY_ID, pcidev)) {
+
 		if (pcidev->vendor == PCI_VENDOR_ID_ADLINK &&
-		    pcidev->device == PCI_DEVICE_ID_PCI8164) {
+			pcidev->device == PCI_DEVICE_ID_PCI8164) {
 			if (bus || slot) {
 				/* requested particular bus/slot */
 				if (pcidev->bus->number != bus
-					|| PCI_SLOT(pcidev->devfn) != slot)
+					|| PCI_SLOT(pcidev->devfn) != slot) {
 					continue;
+				}
 			}
 			devpriv->pci_dev = pcidev;
 			if (comedi_pci_enable(pcidev, "adl_pci8164") < 0) {
-				printk(KERN_ERR "comedi%d: Failed to enable "
-				"PCI device and request regions\n", dev->minor);
+				printk("comedi%d: Failed to enable PCI device and request regions\n", dev->minor);
 				return -EIO;
 			}
 			dev->iobase = pci_resource_start(pcidev, 2);
-			printk(KERN_DEBUG "comedi: base addr %4lx\n",
-				   dev->iobase);
+			printk("comedi: base addr %4lx\n", dev->iobase);
 
 			s = dev->subdevices + 0;
 			s->type = COMEDI_SUBD_PROC;
@@ -167,7 +149,7 @@ static int adl_pci8164_attach(struct comedi_device *dev,
 			s->n_chan = 4;
 			s->maxdata = 0xffff;
 			s->len_chanlist = 4;
-			/* s->range_table = &range_axis; */
+			//s->range_table = &range_axis;
 			s->insn_read = adl_pci8164_insn_read_msts;
 			s->insn_write = adl_pci8164_insn_write_cmd;
 
@@ -177,7 +159,7 @@ static int adl_pci8164_attach(struct comedi_device *dev,
 			s->n_chan = 4;
 			s->maxdata = 0xffff;
 			s->len_chanlist = 4;
-			/* s->range_table = &range_axis; */
+			//s->range_table = &range_axis;
 			s->insn_read = adl_pci8164_insn_read_ssts;
 			s->insn_write = adl_pci8164_insn_write_otp;
 
@@ -187,7 +169,7 @@ static int adl_pci8164_attach(struct comedi_device *dev,
 			s->n_chan = 4;
 			s->maxdata = 0xffff;
 			s->len_chanlist = 4;
-			/* s->range_table = &range_axis; */
+			//s->range_table = &range_axis;
 			s->insn_read = adl_pci8164_insn_read_buf0;
 			s->insn_write = adl_pci8164_insn_write_buf0;
 
@@ -197,43 +179,37 @@ static int adl_pci8164_attach(struct comedi_device *dev,
 			s->n_chan = 4;
 			s->maxdata = 0xffff;
 			s->len_chanlist = 4;
-			/* s->range_table = &range_axis; */
+			//s->range_table = &range_axis;
 			s->insn_read = adl_pci8164_insn_read_buf1;
 			s->insn_write = adl_pci8164_insn_write_buf1;
 
-			printk(KERN_INFO "comedi: attached\n");
+			printk("comedi: attached\n");
 
 			return 1;
 		}
 	}
 
-	printk(KERN_ERR "comedi%d: no supported board found!"
-		   "(req. bus/slot : %d/%d)\n", dev->minor, bus, slot);
+	printk("comedi%d: no supported board found! (req. bus/slot : %d/%d)\n",
+		dev->minor, bus, slot);
 	return -EIO;
 }
 
-static int adl_pci8164_detach(struct comedi_device *dev)
+static int adl_pci8164_detach(struct comedi_device * dev)
 {
-	printk(KERN_INFO "comedi%d: pci8164: remove\n", dev->minor);
+	printk("comedi%d: pci8164: remove\n", dev->minor);
 
 	if (devpriv && devpriv->pci_dev) {
-		if (dev->iobase)
+		if (dev->iobase) {
 			comedi_pci_disable(devpriv->pci_dev);
+		}
 		pci_dev_put(devpriv->pci_dev);
 	}
 
 	return 0;
 }
 
-/*
- all the read commands are the same except for the addition a constant
- * const to the data for inw()
- */
-static void adl_pci8164_insn_read(struct comedi_device *dev,
-				  struct comedi_subdevice *s,
-				  struct comedi_insn *insn,
-				  unsigned int *data,
-				  char *action, unsigned short offset)
+static int adl_pci8164_insn_read_msts(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data)
 {
 	int axis, axis_reg;
 	char *axisname;
@@ -262,57 +238,127 @@ static void adl_pci8164_insn_read(struct comedi_device *dev,
 		axisname = "X";
 	}
 
-	data[0] = inw(dev->iobase + axis_reg + offset);
-	printk(KERN_DEBUG "comedi: pci8164 %s read -> "
-						  "%04X:%04X on axis %s\n",
-				action, data[0], data[1], axisname);
-}
+	data[0] = inw(dev->iobase + axis_reg + PCI8164_MSTS);
+	printk("comedi: pci8164 MSTS read -> %04X:%04X on axis %s\n", data[0],
+		data[1], axisname);
 
-static int adl_pci8164_insn_read_msts(struct comedi_device *dev,
-				      struct comedi_subdevice *s,
-				      struct comedi_insn *insn,
-				      unsigned int *data)
-{
-	adl_pci8164_insn_read(dev, s, insn, data, "MSTS", PCI8164_MSTS);
 	return 2;
 }
 
-static int adl_pci8164_insn_read_ssts(struct comedi_device *dev,
-				      struct comedi_subdevice *s,
-				      struct comedi_insn *insn,
-				      unsigned int *data)
+static int adl_pci8164_insn_read_ssts(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data)
 {
-	adl_pci8164_insn_read(dev, s, insn, data, "SSTS", PCI8164_SSTS);
+	int axis, axis_reg;
+	char *axisname;
+
+	axis = CR_CHAN(insn->chanspec);
+
+	switch (axis) {
+	case 0:
+		axis_reg = PCI8164_AXIS_X;
+		axisname = "X";
+		break;
+	case 1:
+		axis_reg = PCI8164_AXIS_Y;
+		axisname = "Y";
+		break;
+	case 2:
+		axis_reg = PCI8164_AXIS_Z;
+		axisname = "Z";
+		break;
+	case 3:
+		axis_reg = PCI8164_AXIS_U;
+		axisname = "U";
+		break;
+	default:
+		axis_reg = PCI8164_AXIS_X;
+		axisname = "X";
+	}
+
+	data[0] = inw(dev->iobase + axis_reg + PCI8164_SSTS);
+	printk("comedi: pci8164 SSTS read -> %04X:%04X on axis %s\n", data[0],
+		data[1], axisname);
+
 	return 2;
 }
 
-static int adl_pci8164_insn_read_buf0(struct comedi_device *dev,
-				      struct comedi_subdevice *s,
-				      struct comedi_insn *insn,
-				      unsigned int *data)
+static int adl_pci8164_insn_read_buf0(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data)
 {
-	adl_pci8164_insn_read(dev, s, insn, data, "BUF0", PCI8164_BUF0);
+	int axis, axis_reg;
+	char *axisname;
+
+	axis = CR_CHAN(insn->chanspec);
+
+	switch (axis) {
+	case 0:
+		axis_reg = PCI8164_AXIS_X;
+		axisname = "X";
+		break;
+	case 1:
+		axis_reg = PCI8164_AXIS_Y;
+		axisname = "Y";
+		break;
+	case 2:
+		axis_reg = PCI8164_AXIS_Z;
+		axisname = "Z";
+		break;
+	case 3:
+		axis_reg = PCI8164_AXIS_U;
+		axisname = "U";
+		break;
+	default:
+		axis_reg = PCI8164_AXIS_X;
+		axisname = "X";
+	}
+
+	data[0] = inw(dev->iobase + axis_reg + PCI8164_BUF0);
+	printk("comedi: pci8164 BUF0 read -> %04X:%04X on axis %s\n", data[0],
+		data[1], axisname);
+
 	return 2;
 }
 
-static int adl_pci8164_insn_read_buf1(struct comedi_device *dev,
-				      struct comedi_subdevice *s,
-				      struct comedi_insn *insn,
-				      unsigned int *data)
+static int adl_pci8164_insn_read_buf1(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data)
 {
-	adl_pci8164_insn_read(dev, s, insn, data, "BUF1", PCI8164_BUF1);
+	int axis, axis_reg;
+
+	char *axisname;
+
+	axis = CR_CHAN(insn->chanspec);
+
+	switch (axis) {
+	case 0:
+		axis_reg = PCI8164_AXIS_X;
+		axisname = "X";
+		break;
+	case 1:
+		axis_reg = PCI8164_AXIS_Y;
+		axisname = "Y";
+		break;
+	case 2:
+		axis_reg = PCI8164_AXIS_Z;
+		axisname = "Z";
+		break;
+	case 3:
+		axis_reg = PCI8164_AXIS_U;
+		axisname = "U";
+		break;
+	default:
+		axis_reg = PCI8164_AXIS_X;
+		axisname = "X";
+	}
+
+	data[0] = inw(dev->iobase + axis_reg + PCI8164_BUF1);
+	printk("comedi: pci8164 BUF1 read -> %04X:%04X on axis %s\n", data[0],
+		data[1], axisname);
+
 	return 2;
 }
 
-/*
- all the write commands are the same except for the addition a constant
- * const to the data for outw()
- */
-static void adl_pci8164_insn_out(struct comedi_device *dev,
-				 struct comedi_subdevice *s,
-				 struct comedi_insn *insn,
-				 unsigned int *data,
-				 char *action, unsigned short offset)
+static int adl_pci8164_insn_write_cmd(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data)
 {
 	unsigned int axis, axis_reg;
 
@@ -342,90 +388,125 @@ static void adl_pci8164_insn_out(struct comedi_device *dev,
 		axisname = "X";
 	}
 
-	outw(data[0], dev->iobase + axis_reg + offset);
+	outw(data[0], dev->iobase + axis_reg + PCI8164_CMD);
+	printk("comedi: pci8164 CMD write -> %04X:%04X on axis %s\n", data[0],
+		data[1], axisname);
 
-	printk(KERN_DEBUG "comedi: pci8164 %s write -> "
-						"%04X:%04X on axis %s\n",
-				action, data[0], data[1], axisname);
-
-}
-
-static int adl_pci8164_insn_write_cmd(struct comedi_device *dev,
-				      struct comedi_subdevice *s,
-				      struct comedi_insn *insn,
-				      unsigned int *data)
-{
-	adl_pci8164_insn_out(dev, s, insn, data, "CMD", PCI8164_CMD);
 	return 2;
 }
 
-static int adl_pci8164_insn_write_otp(struct comedi_device *dev,
-				      struct comedi_subdevice *s,
-				      struct comedi_insn *insn,
-				      unsigned int *data)
+static int adl_pci8164_insn_write_otp(struct comedi_device * dev, struct comedi_subdevice * s,
+	struct comedi_insn * insn, unsigned int * data)
 {
-	adl_pci8164_insn_out(dev, s, insn, data, "OTP", PCI8164_OTP);
+	int axis, axis_reg;
+
+	char *axisname;
+
+	axis = CR_CHAN(insn->chanspec);
+
+	switch (axis) {
+	case 0:
+		axis_reg = PCI8164_AXIS_X;
+		axisname = "X";
+		break;
+	case 1:
+		axis_reg = PCI8164_AXIS_Y;
+		axisname = "Y";
+		break;
+	case 2:
+		axis_reg = PCI8164_AXIS_Z;
+		axisname = "Z";
+		break;
+	case 3:
+		axis_reg = PCI8164_AXIS_U;
+		axisname = "U";
+		break;
+	default:
+		axis_reg = PCI8164_AXIS_X;
+		axisname = "X";
+	}
+
+	outw(data[0], dev->iobase + axis_reg + PCI8164_OTP);
+	printk("comedi: pci8164 OTP write -> %04X:%04X on axis %s\n", data[0],
+		data[1], axisname);
+
 	return 2;
 }
 
-static int adl_pci8164_insn_write_buf0(struct comedi_device *dev,
-				       struct comedi_subdevice *s,
-				       struct comedi_insn *insn,
-				       unsigned int *data)
+static int adl_pci8164_insn_write_buf0(struct comedi_device * dev,
+	struct comedi_subdevice * s, struct comedi_insn * insn, unsigned int * data)
 {
-	adl_pci8164_insn_out(dev, s, insn, data, "BUF0", PCI8164_BUF0);
+	int axis, axis_reg;
+
+	char *axisname;
+
+	axis = CR_CHAN(insn->chanspec);
+
+	switch (axis) {
+	case 0:
+		axis_reg = PCI8164_AXIS_X;
+		axisname = "X";
+		break;
+	case 1:
+		axis_reg = PCI8164_AXIS_Y;
+		axisname = "Y";
+		break;
+	case 2:
+		axis_reg = PCI8164_AXIS_Z;
+		axisname = "Z";
+		break;
+	case 3:
+		axis_reg = PCI8164_AXIS_U;
+		axisname = "U";
+		break;
+	default:
+		axis_reg = PCI8164_AXIS_X;
+		axisname = "X";
+	}
+
+	outw(data[0], dev->iobase + axis_reg + PCI8164_BUF0);
+	printk("comedi: pci8164 BUF0 write -> %04X:%04X on axis %s\n", data[0],
+		data[1], axisname);
+
 	return 2;
 }
 
-static int adl_pci8164_insn_write_buf1(struct comedi_device *dev,
-				       struct comedi_subdevice *s,
-				       struct comedi_insn *insn,
-				       unsigned int *data)
+static int adl_pci8164_insn_write_buf1(struct comedi_device * dev,
+	struct comedi_subdevice * s, struct comedi_insn * insn, unsigned int * data)
 {
-	adl_pci8164_insn_out(dev, s, insn, data, "BUF1", PCI8164_BUF1);
+	int axis, axis_reg;
+
+	char *axisname;
+
+	axis = CR_CHAN(insn->chanspec);
+
+	switch (axis) {
+	case 0:
+		axis_reg = PCI8164_AXIS_X;
+		axisname = "X";
+		break;
+	case 1:
+		axis_reg = PCI8164_AXIS_Y;
+		axisname = "Y";
+		break;
+	case 2:
+		axis_reg = PCI8164_AXIS_Z;
+		axisname = "Z";
+		break;
+	case 3:
+		axis_reg = PCI8164_AXIS_U;
+		axisname = "U";
+		break;
+	default:
+		axis_reg = PCI8164_AXIS_X;
+		axisname = "X";
+	}
+
+	outw(data[0], dev->iobase + axis_reg + PCI8164_BUF1);
+	printk("comedi: pci8164 BUF1 write -> %04X:%04X on axis %s\n", data[0],
+		data[1], axisname);
+
 	return 2;
 }
 
-static int __devinit driver_adl_pci8164_pci_probe(struct pci_dev *dev,
-						  const struct pci_device_id
-						  *ent)
-{
-	return comedi_pci_auto_config(dev, driver_adl_pci8164.driver_name);
-}
-
-static void __devexit driver_adl_pci8164_pci_remove(struct pci_dev *dev)
-{
-	comedi_pci_auto_unconfig(dev);
-}
-
-static struct pci_driver driver_adl_pci8164_pci_driver = {
-	.id_table = adl_pci8164_pci_table,
-	.probe = &driver_adl_pci8164_pci_probe,
-	.remove = __devexit_p(&driver_adl_pci8164_pci_remove)
-};
-
-static int __init driver_adl_pci8164_init_module(void)
-{
-	int retval;
-
-	retval = comedi_driver_register(&driver_adl_pci8164);
-	if (retval < 0)
-		return retval;
-
-	driver_adl_pci8164_pci_driver.name =
-	    (char *)driver_adl_pci8164.driver_name;
-	return pci_register_driver(&driver_adl_pci8164_pci_driver);
-}
-
-static void __exit driver_adl_pci8164_cleanup_module(void)
-{
-	pci_unregister_driver(&driver_adl_pci8164_pci_driver);
-	comedi_driver_unregister(&driver_adl_pci8164);
-}
-
-module_init(driver_adl_pci8164_init_module);
-module_exit(driver_adl_pci8164_cleanup_module);
-
-MODULE_AUTHOR("Comedi http://www.comedi.org");
-MODULE_DESCRIPTION("Comedi low-level driver");
-MODULE_LICENSE("GPL");
+COMEDI_PCI_INITCLEANUP(driver_adl_pci8164, adl_pci8164_pci_table);

@@ -1,6 +1,6 @@
 /*
  * QLogic Fibre Channel HBA Driver
- * Copyright (c)  2003-2010 QLogic Corporation
+ * Copyright (c)  2003-2008 QLogic Corporation
  *
  * See LICENSE.qla2xxx for copyright and licensing details.
  */
@@ -121,11 +121,8 @@ qla2x00_chk_ms_status(scsi_qla_host_t *vha, ms_iocb_entry_t *ms_pkt,
 
 	rval = QLA_FUNCTION_FAILED;
 	if (ms_pkt->entry_status != 0) {
-		DEBUG2_3(printk(KERN_WARNING "scsi(%ld): %s failed, error status "
-		    "(%x) on port_id: %02x%02x%02x.\n",
-		    vha->host_no, routine, ms_pkt->entry_status,
-		    vha->d_id.b.domain, vha->d_id.b.area,
-		    vha->d_id.b.al_pa));
+		DEBUG2_3(printk("scsi(%ld): %s failed, error status (%x).\n",
+		    vha->host_no, routine, ms_pkt->entry_status));
 	} else {
 		if (IS_FWI2_CAPABLE(ha))
 			comp_status = le16_to_cpu(
@@ -139,10 +136,8 @@ qla2x00_chk_ms_status(scsi_qla_host_t *vha, ms_iocb_entry_t *ms_pkt,
 			if (ct_rsp->header.response !=
 			    __constant_cpu_to_be16(CT_ACCEPT_RESPONSE)) {
 				DEBUG2_3(printk("scsi(%ld): %s failed, "
-				    "rejected request on port_id: %02x%02x%02x\n",
-				    vha->host_no, routine,
-				    vha->d_id.b.domain, vha->d_id.b.area,
-				    vha->d_id.b.al_pa));
+				    "rejected request:\n", vha->host_no,
+				    routine));
 				DEBUG2_3(qla2x00_dump_buffer(
 				    (uint8_t *)&ct_rsp->header,
 				    sizeof(struct ct_rsp_hdr)));
@@ -152,10 +147,8 @@ qla2x00_chk_ms_status(scsi_qla_host_t *vha, ms_iocb_entry_t *ms_pkt,
 			break;
 		default:
 			DEBUG2_3(printk("scsi(%ld): %s failed, completion "
-			    "status (%x) on port_id: %02x%02x%02x.\n",
-			    vha->host_no, routine, comp_status,
-			    vha->d_id.b.domain, vha->d_id.b.area,
-			    vha->d_id.b.al_pa));
+			    "status (%x).\n", vha->host_no, routine,
+			    comp_status));
 			break;
 		}
 	}
@@ -1114,7 +1107,7 @@ qla2x00_mgmt_svr_login(scsi_qla_host_t *vha)
 		return ret;
 
 	ha->isp_ops->fabric_login(vha, vha->mgmt_svr_loop_id, 0xff, 0xff, 0xfa,
-	    mb, BIT_1|BIT_0);
+	    mb, BIT_1);
 	if (mb[0] != MBS_COMMAND_COMPLETE) {
 		DEBUG2_13(printk("%s(%ld): Failed MANAGEMENT_SERVER login: "
 		    "loop_id=%x mb[0]=%x mb[1]=%x mb[2]=%x mb[6]=%x mb[7]=%x\n",
@@ -1542,7 +1535,7 @@ qla2x00_fdmi_rpa(scsi_qla_host_t *vha)
 	eiter = (struct ct_fdmi_port_attr *) (entries + size);
 	eiter->type = __constant_cpu_to_be16(FDMI_PORT_SUPPORT_SPEED);
 	eiter->len = __constant_cpu_to_be16(4 + 4);
-	if (IS_QLA8XXX_TYPE(ha))
+	if (IS_QLA81XX(ha))
 		eiter->a.sup_speed = __constant_cpu_to_be32(
 		    FDMI_PORT_SPEED_10GB);
 	else if (IS_QLA25XX(ha))
@@ -1681,10 +1674,6 @@ int
 qla2x00_fdmi_register(scsi_qla_host_t *vha)
 {
 	int rval;
-       struct qla_hw_data *ha = vha->hw;
-
-	if (IS_QLA2100(ha) || IS_QLA2200(ha))
-		return QLA_FUNCTION_FAILED;
 
 	rval = qla2x00_mgmt_svr_login(vha);
 	if (rval)
@@ -1890,9 +1879,6 @@ qla2x00_gpsc(scsi_qla_host_t *vha, sw_info_t *list)
 			case BIT_13:
 				list[i].fp_speed = PORT_SPEED_4GB;
 				break;
-			case BIT_12:
-				list[i].fp_speed = PORT_SPEED_10GB;
-				break;
 			case BIT_11:
 				list[i].fp_speed = PORT_SPEED_8GB;
 				break;
@@ -1919,76 +1905,4 @@ qla2x00_gpsc(scsi_qla_host_t *vha, sw_info_t *list)
 	}
 
 	return (rval);
-}
-
-/**
- * qla2x00_gff_id() - SNS Get FC-4 Features (GFF_ID) query.
- *
- * @ha: HA context
- * @list: switch info entries to populate
- *
- */
-void
-qla2x00_gff_id(scsi_qla_host_t *vha, sw_info_t *list)
-{
-	int		rval;
-	uint16_t	i;
-
-	ms_iocb_entry_t	*ms_pkt;
-	struct ct_sns_req	*ct_req;
-	struct ct_sns_rsp	*ct_rsp;
-	struct qla_hw_data *ha = vha->hw;
-	uint8_t fcp_scsi_features = 0;
-
-	for (i = 0; i < MAX_FIBRE_DEVICES; i++) {
-		/* Set default FC4 Type as UNKNOWN so the default is to
-		 * Process this port */
-		list[i].fc4_type = FC4_TYPE_UNKNOWN;
-
-		/* Do not attempt GFF_ID if we are not FWI_2 capable */
-		if (!IS_FWI2_CAPABLE(ha))
-			continue;
-
-		/* Prepare common MS IOCB */
-		ms_pkt = ha->isp_ops->prep_ms_iocb(vha, GFF_ID_REQ_SIZE,
-		    GFF_ID_RSP_SIZE);
-
-		/* Prepare CT request */
-		ct_req = qla2x00_prep_ct_req(&ha->ct_sns->p.req, GFF_ID_CMD,
-		    GFF_ID_RSP_SIZE);
-		ct_rsp = &ha->ct_sns->p.rsp;
-
-		/* Prepare CT arguments -- port_id */
-		ct_req->req.port_id.port_id[0] = list[i].d_id.b.domain;
-		ct_req->req.port_id.port_id[1] = list[i].d_id.b.area;
-		ct_req->req.port_id.port_id[2] = list[i].d_id.b.al_pa;
-
-		/* Execute MS IOCB */
-		rval = qla2x00_issue_iocb(vha, ha->ms_iocb, ha->ms_iocb_dma,
-		   sizeof(ms_iocb_entry_t));
-
-		if (rval != QLA_SUCCESS) {
-			DEBUG2_3(printk(KERN_INFO
-			    "scsi(%ld): GFF_ID issue IOCB failed "
-			    "(%d).\n", vha->host_no, rval));
-		} else if (qla2x00_chk_ms_status(vha, ms_pkt, ct_rsp,
-			       "GFF_ID") != QLA_SUCCESS) {
-			DEBUG2_3(printk(KERN_INFO
-			    "scsi(%ld): GFF_ID IOCB status had a "
-			    "failure status code\n", vha->host_no));
-		} else {
-			fcp_scsi_features =
-			   ct_rsp->rsp.gff_id.fc4_features[GFF_FCP_SCSI_OFFSET];
-			fcp_scsi_features &= 0x0f;
-
-			if (fcp_scsi_features)
-				list[i].fc4_type = FC4_TYPE_FCP_SCSI;
-			else
-				list[i].fc4_type = FC4_TYPE_OTHER;
-		}
-
-		/* Last device exit. */
-		if (list[i].d_id.b.rsvd_1 != 0)
-			break;
-	}
 }

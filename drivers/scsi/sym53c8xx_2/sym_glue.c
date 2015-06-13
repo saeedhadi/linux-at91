@@ -505,7 +505,7 @@ void sym_log_bus_error(struct Scsi_Host *shost)
  * queuecommand method.  Entered with the host adapter lock held and
  * interrupts disabled.
  */
-static int sym53c8xx_queue_command_lck(struct scsi_cmnd *cmd,
+static int sym53c8xx_queue_command(struct scsi_cmnd *cmd,
 					void (*done)(struct scsi_cmnd *))
 {
 	struct sym_hcb *np = SYM_SOFTC_PTR(cmd);
@@ -535,8 +535,6 @@ static int sym53c8xx_queue_command_lck(struct scsi_cmnd *cmd,
 		return SCSI_MLQUEUE_HOST_BUSY;
 	return 0;
 }
-
-static DEF_SCSI_QCMD(sym53c8xx_queue_command)
 
 /*
  *  Linux entry point of the interrupt handler.
@@ -739,14 +737,11 @@ static int sym53c8xx_slave_alloc(struct scsi_device *sdev)
 	struct sym_hcb *np = sym_get_hcb(sdev->host);
 	struct sym_tcb *tp = &np->target[sdev->id];
 	struct sym_lcb *lp;
-	unsigned long flags;
-	int error;
 
 	if (sdev->id >= SYM_CONF_MAX_TARGET || sdev->lun >= SYM_CONF_MAX_LUN)
 		return -ENXIO;
 
-	spin_lock_irqsave(np->s.host->host_lock, flags);
-
+	tp->starget = sdev->sdev_target;
 	/*
 	 * Fail the device init if the device is flagged NOSCAN at BOOT in
 	 * the NVRAM.  This may speed up boot and maintain coherency with
@@ -758,37 +753,26 @@ static int sym53c8xx_slave_alloc(struct scsi_device *sdev)
 
 	if (tp->usrflags & SYM_SCAN_BOOT_DISABLED) {
 		tp->usrflags &= ~SYM_SCAN_BOOT_DISABLED;
-		starget_printk(KERN_INFO, sdev->sdev_target,
+		starget_printk(KERN_INFO, tp->starget,
 				"Scan at boot disabled in NVRAM\n");
-		error = -ENXIO;
-		goto out;
+		return -ENXIO;
 	}
 
 	if (tp->usrflags & SYM_SCAN_LUNS_DISABLED) {
-		if (sdev->lun != 0) {
-			error = -ENXIO;
-			goto out;
-		}
-		starget_printk(KERN_INFO, sdev->sdev_target,
+		if (sdev->lun != 0)
+			return -ENXIO;
+		starget_printk(KERN_INFO, tp->starget,
 				"Multiple LUNs disabled in NVRAM\n");
 	}
 
 	lp = sym_alloc_lcb(np, sdev->id, sdev->lun);
-	if (!lp) {
-		error = -ENOMEM;
-		goto out;
-	}
-	if (tp->nlcb == 1)
-		tp->starget = sdev->sdev_target;
+	if (!lp)
+		return -ENOMEM;
 
 	spi_min_period(tp->starget) = tp->usr_period;
 	spi_max_width(tp->starget) = tp->usr_width;
 
-	error = 0;
-out:
-	spin_unlock_irqrestore(np->s.host->host_lock, flags);
-
-	return error;
+	return 0;
 }
 
 /*
@@ -835,34 +819,12 @@ static int sym53c8xx_slave_configure(struct scsi_device *sdev)
 static void sym53c8xx_slave_destroy(struct scsi_device *sdev)
 {
 	struct sym_hcb *np = sym_get_hcb(sdev->host);
-	struct sym_tcb *tp = &np->target[sdev->id];
-	struct sym_lcb *lp = sym_lp(tp, sdev->lun);
-	unsigned long flags;
+	struct sym_lcb *lp = sym_lp(&np->target[sdev->id], sdev->lun);
 
-	spin_lock_irqsave(np->s.host->host_lock, flags);
-
-	if (lp->busy_itlq || lp->busy_itl) {
-		/*
-		 * This really shouldn't happen, but we can't return an error
-		 * so let's try to stop all on-going I/O.
-		 */
-		starget_printk(KERN_WARNING, tp->starget,
-			       "Removing busy LCB (%d)\n", sdev->lun);
-		sym_reset_scsi_bus(np, 1);
-	}
-
-	if (sym_free_lcb(np, sdev->id, sdev->lun) == 0) {
-		/*
-		 * It was the last unit for this target.
-		 */
-		tp->head.sval        = 0;
-		tp->head.wval        = np->rv_scntl3;
-		tp->head.uval        = 0;
-		tp->tgoal.check_nego = 1;
-		tp->starget	     = NULL;
-	}
-
-	spin_unlock_irqrestore(np->s.host->host_lock, flags);
+	if (lp->itlq_tbl)
+		sym_mfree_dma(lp->itlq_tbl, SYM_CONF_MAX_TASK * 4, "ITLQ_TBL");
+	kfree(lp->cb_tags);
+	sym_mfree_dma(lp, sizeof(*lp), "LCB");
 }
 
 /*
@@ -928,8 +890,6 @@ static void sym_exec_user_command (struct sym_hcb *np, struct sym_usrcmd *uc)
 			if (!((uc->target >> t) & 1))
 				continue;
 			tp = &np->target[t];
-			if (!tp->nlcb)
-				continue;
 
 			switch (uc->cmd) {
 
@@ -986,7 +946,7 @@ static void sym_exec_user_command (struct sym_hcb *np, struct sym_usrcmd *uc)
 	}
 }
 
-static int sym_skip_spaces(char *ptr, int len)
+static int skip_spaces(char *ptr, int len)
 {
 	int cnt, c;
 
@@ -1014,7 +974,7 @@ static int is_keyword(char *ptr, int len, char *verb)
 }
 
 #define SKIP_SPACES(ptr, len)						\
-	if ((arg_len = sym_skip_spaces(ptr, len)) < 1)			\
+	if ((arg_len = skip_spaces(ptr, len)) < 1)			\
 		return -EINVAL;						\
 	ptr += arg_len; len -= arg_len;
 
@@ -1866,7 +1826,7 @@ static pci_ers_result_t sym2_io_slot_dump(struct pci_dev *pdev)
  *
  * This routine is similar to sym_set_workarounds(), except
  * that, at this point, we already know that the device was
- * successfully initialized at least once before, and so most
+ * succesfully intialized at least once before, and so most
  * of the steps taken there are un-needed here.
  */
 static void sym2_reset_workarounds(struct pci_dev *pdev)

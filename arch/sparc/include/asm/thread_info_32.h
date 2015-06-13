@@ -54,6 +54,8 @@ struct thread_info {
 
 /*
  * macros/functions for gaining access to the thread information structure
+ *
+ * preempt_count needs to be 1 initially, until the scheduler is functional.
  */
 #define INIT_THREAD_INFO(tsk)				\
 {							\
@@ -62,7 +64,7 @@ struct thread_info {
 	.exec_domain	=	&default_exec_domain,	\
 	.flags		=	0,			\
 	.cpu		=	0,			\
-	.preempt_count	=	INIT_PREEMPT_COUNT,	\
+	.preempt_count	=	1,			\
 	.restart_block	= {				\
 		.fn	=	do_no_restart_syscall,	\
 	},						\
@@ -82,8 +84,8 @@ register struct thread_info *current_thread_info_reg asm("g6");
 
 #define __HAVE_ARCH_THREAD_INFO_ALLOCATOR
 
-BTFIXUPDEF_CALL(struct thread_info *, alloc_thread_info_node, int)
-#define alloc_thread_info_node(tsk, node) BTFIXUP_CALL(alloc_thread_info_node)(node)
+BTFIXUPDEF_CALL(struct thread_info *, alloc_thread_info, void)
+#define alloc_thread_info(tsk) BTFIXUP_CALL(alloc_thread_info)()
 
 BTFIXUPDEF_CALL(void, free_thread_info, struct thread_info *)
 #define free_thread_info(ti) BTFIXUP_CALL(free_thread_info)(ti)
@@ -92,7 +94,7 @@ BTFIXUPDEF_CALL(void, free_thread_info, struct thread_info *)
 
 /*
  * Size of kernel stack for each process.
- * Observe the order of get_free_pages() in alloc_thread_info_node().
+ * Observe the order of get_free_pages() in alloc_thread_info().
  * The sun4 has 8K stack too, because it's short on memory, and 16K is a waste.
  */
 #define THREAD_SIZE		8192
@@ -132,7 +134,7 @@ BTFIXUPDEF_CALL(void, free_thread_info, struct thread_info *)
 					 * this quantum (SMP) */
 #define TIF_POLLING_NRFLAG	9	/* true if poll_idle() is polling
 					 * TIF_NEED_RESCHED */
-#define TIF_MEMDIE		10	/* is terminating due to OOM killer */
+#define TIF_MEMDIE		10
 #define TIF_FREEZE		11	/* is freezing for suspend */
 
 /* as above, but as bit values */

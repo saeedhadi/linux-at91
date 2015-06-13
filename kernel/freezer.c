@@ -44,19 +44,12 @@ void refrigerator(void)
 	recalc_sigpending(); /* We sent fake signal, clean it up */
 	spin_unlock_irq(&current->sighand->siglock);
 
-	/* prevent accounting of that task to load */
-	current->flags |= PF_FREEZING;
-
 	for (;;) {
 		set_current_state(TASK_UNINTERRUPTIBLE);
 		if (!frozen(current))
 			break;
 		schedule();
 	}
-
-	/* Remove the accounting blocker */
-	current->flags &= ~PF_FREEZING;
-
 	pr_debug("%s left refrigerator\n", current->comm);
 	__set_current_state(save);
 }
@@ -104,13 +97,8 @@ bool freeze_task(struct task_struct *p, bool sig_only)
 	}
 
 	if (should_send_signal(p)) {
-		fake_signal_wake_up(p);
-		/*
-		 * fake_signal_wake_up() goes through p's scheduler
-		 * lock and guarantees that TASK_STOPPED/TRACED ->
-		 * TASK_RUNNING transition can't race with task state
-		 * testing in try_to_freeze_tasks().
-		 */
+		if (!signal_pending(p))
+			fake_signal_wake_up(p);
 	} else if (sig_only) {
 		return false;
 	} else {

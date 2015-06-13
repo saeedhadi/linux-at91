@@ -23,7 +23,6 @@
 
 #include <linux/errno.h>
 #include <linux/fs.h>
-#include <linux/gfp.h>
 #include <linux/mm.h>
 #include <linux/pagemap.h>
 #include <linux/swap.h>
@@ -1543,13 +1542,14 @@ err_out:
  */
 const struct address_space_operations ntfs_aops = {
 	.readpage	= ntfs_readpage,	/* Fill page with data. */
+	.sync_page	= block_sync_page,	/* Currently, just unplugs the
+						   disk request queue. */
 #ifdef NTFS_RW
 	.writepage	= ntfs_writepage,	/* Write dirty page to disk. */
 #endif /* NTFS_RW */
 	.migratepage	= buffer_migrate_page,	/* Move a page cache page from
 						   one physical page to an
 						   other. */
-	.error_remove_page = generic_error_remove_page,
 };
 
 /**
@@ -1558,6 +1558,8 @@ const struct address_space_operations ntfs_aops = {
  */
 const struct address_space_operations ntfs_mst_aops = {
 	.readpage	= ntfs_readpage,	/* Fill page with data. */
+	.sync_page	= block_sync_page,	/* Currently, just unplugs the
+						   disk request queue. */
 #ifdef NTFS_RW
 	.writepage	= ntfs_writepage,	/* Write dirty page to disk. */
 	.set_page_dirty	= __set_page_dirty_nobuffers,	/* Set the page dirty
@@ -1567,7 +1569,6 @@ const struct address_space_operations ntfs_mst_aops = {
 	.migratepage	= buffer_migrate_page,	/* Move a page cache page from
 						   one physical page to an
 						   other. */
-	.error_remove_page = generic_error_remove_page,
 };
 
 #ifdef NTFS_RW

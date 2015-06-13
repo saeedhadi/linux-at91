@@ -15,7 +15,7 @@ struct usb_dr_device {
 	u8 res1[256];
 	u16 caplength;		/* Capability Register Length */
 	u16 hciversion;		/* Host Controller Interface Version */
-	u32 hcsparams;		/* Host Controller Structural Parameters */
+	u32 hcsparams;		/* Host Controller Structual Parameters */
 	u32 hccparams;		/* Host Controller Capability Parameters */
 	u8 res2[20];
 	u32 dciversion;		/* Device Controller Interface Version */
@@ -52,7 +52,7 @@ struct usb_dr_host {
 	u8 res1[256];
 	u16 caplength;		/* Capability Register Length */
 	u16 hciversion;		/* Host Controller Interface Version */
-	u32 hcsparams;		/* Host Controller Structural Parameters */
+	u32 hcsparams;		/* Host Controller Structual Parameters */
 	u32 hccparams;		/* Host Controller Capability Parameters */
 	u8 res2[20];
 	u32 dciversion;		/* Device Controller Interface Version */
@@ -562,23 +562,5 @@ static void dump_msg(const char *label, const u8 * buf, unsigned int length)
 #define get_pipe_by_windex(windex)	((windex & USB_ENDPOINT_NUMBER_MASK) \
 					* 2 + ((windex & USB_DIR_IN) ? 1 : 0))
 #define get_pipe_by_ep(EP)	(ep_index(EP) * 2 + ep_is_in(EP))
-
-struct platform_device;
-#ifdef CONFIG_ARCH_MXC
-int fsl_udc_clk_init(struct platform_device *pdev);
-void fsl_udc_clk_finalize(struct platform_device *pdev);
-void fsl_udc_clk_release(void);
-#else
-static inline int fsl_udc_clk_init(struct platform_device *pdev)
-{
-	return 0;
-}
-static inline void fsl_udc_clk_finalize(struct platform_device *pdev)
-{
-}
-static inline void fsl_udc_clk_release(void)
-{
-}
-#endif
 
 #endif

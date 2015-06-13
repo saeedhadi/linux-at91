@@ -38,7 +38,7 @@
 #define K8_NOP8	K8_NOP4 K8_NOP4
 
 /* K7 nops
-   uses eax dependencies (arbitrary choice)
+   uses eax dependencies (arbitary choice)
    1: nop
    2: movl %eax,%eax
    3: leal (,%eax,1),%eax
@@ -65,8 +65,6 @@
    6: osp nopl 0x00(%eax,%eax,1)
    7: nopl 0x00000000(%eax)
    8: nopl 0x00000000(%eax,%eax,1)
-   Note: All the above are assumed to be a single instruction.
-	There is kernel code that depends on this.
 */
 #define P6_NOP1	GENERIC_NOP1
 #define P6_NOP2	".byte 0x66,0x90\n"

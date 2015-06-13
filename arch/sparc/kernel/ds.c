@@ -544,8 +544,7 @@ static int __cpuinit dr_cpu_configure(struct ds_info *dp,
 			     resp_len, ncpus, mask,
 			     DR_CPU_STAT_CONFIGURED);
 
-	mdesc_populate_present_mask(mask);
-	mdesc_fill_in_cpu_data(mask);
+	mdesc_fill_in_cpu_data(*mask);
 
 	for_each_cpu_mask(cpu, *mask) {
 		int err;
@@ -1218,7 +1217,7 @@ static int ds_remove(struct vio_dev *vdev)
 	return 0;
 }
 
-static const struct vio_device_id ds_match[] = {
+static struct vio_device_id __initdata ds_match[] = {
 	{
 		.type = "domain-services-port",
 	},

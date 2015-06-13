@@ -20,9 +20,6 @@
  *     with a base rate of 5+ MHz, packaged as a clocksource (with
  *     resolution better than 200 nsec).
  *
- *   - Some chips support 32 bit counter in one channel, then the second
- *     channel is not used.
- *
  *   - The third channel may be used to provide a 16-bit clockevent
  *     source, used in either periodic or oneshot mode.  This runs
  *     at 32 KiHZ, and can handle delays of up to two seconds.
@@ -48,15 +45,10 @@ static cycle_t tc_get_cycles(struct clocksource *cs)
 	u32		lower, upper;
 
 	raw_local_irq_save(flags);
-#ifndef CONFIG_ATMEL_TCB_CLKSRC_32BIT
 	do {
 		upper = __raw_readl(tcaddr + ATMEL_TC_REG(1, CV));
 		lower = __raw_readl(tcaddr + ATMEL_TC_REG(0, CV));
 	} while (upper != __raw_readl(tcaddr + ATMEL_TC_REG(1, CV)));
-#else
-	upper = 0;
-	lower = __raw_readl(tcaddr + ATMEL_TC_REG(0, CV));
-#endif
 
 	raw_local_irq_restore(flags);
 	return (upper << 16) | lower;
@@ -204,9 +196,9 @@ static void __init setup_clkevents(struct atmel_tc *tc, int clk32k_divisor_idx)
 	clkevt.clkevt.min_delta_ns = clockevent_delta2ns(1, &clkevt.clkevt) + 1;
 	clkevt.clkevt.cpumask = cpumask_of(0);
 
-	clockevents_register_device(&clkevt.clkevt);
-
 	setup_irq(irq, &tc_irqaction);
+
+	clockevents_register_device(&clkevt.clkevt);
 }
 
 #else /* !CONFIG_GENERIC_CLOCKEVENTS */
@@ -279,21 +271,14 @@ static int __init tcb_clksrc_init(void)
 	__raw_writel(best_divisor_idx			/* likely divide-by-8 */
 			| ATMEL_TC_WAVE
 			| ATMEL_TC_WAVESEL_UP		/* free-run */
-#ifndef CONFIG_ATMEL_TCB_CLKSRC_32BIT
 			| ATMEL_TC_ACPA_SET		/* TIOA0 rises at 0 */
-			| ATMEL_TC_ACPC_CLEAR		/* (duty cycle 50%) */
-#endif
-			,
+			| ATMEL_TC_ACPC_CLEAR,		/* (duty cycle 50%) */
 			tcaddr + ATMEL_TC_REG(0, CMR));
-
-#ifndef CONFIG_ATMEL_TCB_CLKSRC_32BIT
 	__raw_writel(0x0000, tcaddr + ATMEL_TC_REG(0, RA));
 	__raw_writel(0x8000, tcaddr + ATMEL_TC_REG(0, RC));
-#endif
 	__raw_writel(0xff, tcaddr + ATMEL_TC_REG(0, IDR));	/* no irqs */
 	__raw_writel(ATMEL_TC_CLKEN, tcaddr + ATMEL_TC_REG(0, CCR));
 
-#ifndef CONFIG_ATMEL_TCB_CLKSRC_32BIT
 	/* channel 1:  waveform mode, input TIOA0 */
 	__raw_writel(ATMEL_TC_XC1			/* input: TIOA0 */
 			| ATMEL_TC_WAVE
@@ -302,10 +287,8 @@ static int __init tcb_clksrc_init(void)
 	__raw_writel(0xff, tcaddr + ATMEL_TC_REG(1, IDR));	/* no irqs */
 	__raw_writel(ATMEL_TC_CLKEN, tcaddr + ATMEL_TC_REG(1, CCR));
 
-	/* chain channel 0 to channel 1 */
+	/* chain channel 0 to channel 1, then reset all the timers */
 	__raw_writel(ATMEL_TC_TC1XC1S_TIOA0, tcaddr + ATMEL_TC_BMR);
-#endif
-	/* reset all the timers */
 	__raw_writel(ATMEL_TC_SYNC, tcaddr + ATMEL_TC_BCR);
 
 	/* and away we go! */

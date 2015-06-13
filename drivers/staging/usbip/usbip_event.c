@@ -18,17 +18,16 @@
  */
 
 #include "usbip_common.h"
-#include <linux/kthread.h>
 
 static int event_handler(struct usbip_device *ud)
 {
-	usbip_dbg_eh("enter\n");
+	dbg_eh("enter\n");
 
 	/*
 	 * Events are handled by only this thread.
 	 */
-	while (usbip_event_happened(ud)) {
-		usbip_dbg_eh("pending event %lx\n", ud->event);
+	while (usbip_event_happend(ud)) {
+		dbg_eh("pending event %lx\n", ud->event);
 
 		/*
 		 * NOTE: shutdown must come first.
@@ -38,13 +37,21 @@ static int event_handler(struct usbip_device *ud)
 			ud->eh_ops.shutdown(ud);
 
 			ud->event &= ~USBIP_EH_SHUTDOWN;
+
+			break;
 		}
+
+		/* Stop the error handler. */
+		if (ud->event & USBIP_EH_BYE)
+			return -1;
 
 		/* Reset the device. */
 		if (ud->event & USBIP_EH_RESET) {
 			ud->eh_ops.reset(ud);
 
 			ud->event &= ~USBIP_EH_RESET;
+
+			break;
 		}
 
 		/* Mark the device as unusable. */
@@ -52,54 +59,57 @@ static int event_handler(struct usbip_device *ud)
 			ud->eh_ops.unusable(ud);
 
 			ud->event &= ~USBIP_EH_UNUSABLE;
+
+			break;
 		}
 
-		/* Stop the error handler. */
-		if (ud->event & USBIP_EH_BYE)
-			return -1;
+		/* NOTREACHED */
+		printk(KERN_ERR "%s: unknown event\n", __func__);
+		return -1;
 	}
 
 	return 0;
 }
 
-static int event_handler_loop(void *data)
+static void event_handler_loop(struct usbip_task *ut)
 {
-	struct usbip_device *ud = data;
+	struct usbip_device *ud = container_of(ut, struct usbip_device, eh);
 
-	while (!kthread_should_stop()) {
-		wait_event_interruptible(ud->eh_waitq,
-					usbip_event_happened(ud) ||
-					kthread_should_stop());
-		usbip_dbg_eh("wakeup\n");
+	while (1) {
+		if (signal_pending(current)) {
+			dbg_eh("signal catched!\n");
+			break;
+		}
 
 		if (event_handler(ud) < 0)
 			break;
+
+		wait_event_interruptible(ud->eh_waitq, usbip_event_happend(ud));
+		dbg_eh("wakeup\n");
 	}
-	return 0;
 }
 
-int usbip_start_eh(struct usbip_device *ud)
+void usbip_start_eh(struct usbip_device *ud)
 {
+	struct usbip_task *eh = &ud->eh;
+
 	init_waitqueue_head(&ud->eh_waitq);
 	ud->event = 0;
 
-	ud->eh = kthread_run(event_handler_loop, ud, "usbip_eh");
-	if (IS_ERR(ud->eh)) {
-		printk(KERN_WARNING
-			"Unable to start control thread\n");
-		return PTR_ERR(ud->eh);
-	}
-	return 0;
+	usbip_task_init(eh, "usbip_eh", event_handler_loop);
+
+	kernel_thread(usbip_thread, (void *)eh, 0);
+
+	wait_for_completion(&eh->thread_done);
 }
 EXPORT_SYMBOL_GPL(usbip_start_eh);
 
 void usbip_stop_eh(struct usbip_device *ud)
 {
-	if (ud->eh == current)
-		return; /* do not wait for myself */
+	struct usbip_task *eh = &ud->eh;
 
-	kthread_stop(ud->eh);
-	usbip_dbg_eh("usbip_eh has finished\n");
+	wait_for_completion(&eh->thread_done);
+	dbg_eh("usbip_eh has finished\n");
 }
 EXPORT_SYMBOL_GPL(usbip_stop_eh);
 
@@ -115,17 +125,17 @@ void usbip_event_add(struct usbip_device *ud, unsigned long event)
 }
 EXPORT_SYMBOL_GPL(usbip_event_add);
 
-int usbip_event_happened(struct usbip_device *ud)
+int usbip_event_happend(struct usbip_device *ud)
 {
-	int happened = 0;
+	int happend = 0;
 
 	spin_lock(&ud->lock);
 
 	if (ud->event != 0)
-		happened = 1;
+		happend = 1;
 
 	spin_unlock(&ud->lock);
 
-	return happened;
+	return happend;
 }
-EXPORT_SYMBOL_GPL(usbip_event_happened);
+EXPORT_SYMBOL_GPL(usbip_event_happend);

@@ -35,8 +35,7 @@ struct wakeup_header {
 extern struct wakeup_header wakeup_header;
 #endif
 
-#define WAKEUP_HEADER_OFFSET	8
-#define WAKEUP_HEADER_SIGNATURE 0x51ee1111
-#define WAKEUP_END_SIGNATURE	0x65a22c82
+#define HEADER_OFFSET 0x3f00
+#define WAKEUP_SIZE   0x4000
 
 #endif /* ARCH_X86_KERNEL_ACPI_RM_WAKEUP_H */

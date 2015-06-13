@@ -14,36 +14,24 @@
 #include <linux/utsname.h>
 #include <linux/err.h>
 #include <linux/slab.h>
-#include <linux/user_namespace.h>
-
-static struct uts_namespace *create_uts_ns(void)
-{
-	struct uts_namespace *uts_ns;
-
-	uts_ns = kmalloc(sizeof(struct uts_namespace), GFP_KERNEL);
-	if (uts_ns)
-		kref_init(&uts_ns->kref);
-	return uts_ns;
-}
 
 /*
  * Clone a new ns copying an original utsname, setting refcount to 1
  * @old_ns: namespace to clone
  * Return NULL on error (failure to kmalloc), new ns otherwise
  */
-static struct uts_namespace *clone_uts_ns(struct task_struct *tsk,
-					  struct uts_namespace *old_ns)
+static struct uts_namespace *clone_uts_ns(struct uts_namespace *old_ns)
 {
 	struct uts_namespace *ns;
 
-	ns = create_uts_ns();
+	ns = kmalloc(sizeof(struct uts_namespace), GFP_KERNEL);
 	if (!ns)
 		return ERR_PTR(-ENOMEM);
 
 	down_read(&uts_sem);
 	memcpy(&ns->name, &old_ns->name, sizeof(ns->name));
-	ns->user_ns = get_user_ns(task_cred_xxx(tsk, user)->user_ns);
 	up_read(&uts_sem);
+	kref_init(&ns->kref);
 	return ns;
 }
 
@@ -53,10 +41,8 @@ static struct uts_namespace *clone_uts_ns(struct task_struct *tsk,
  * utsname of this process won't be seen by parent, and vice
  * versa.
  */
-struct uts_namespace *copy_utsname(unsigned long flags,
-				   struct task_struct *tsk)
+struct uts_namespace *copy_utsname(unsigned long flags, struct uts_namespace *old_ns)
 {
-	struct uts_namespace *old_ns = tsk->nsproxy->uts_ns;
 	struct uts_namespace *new_ns;
 
 	BUG_ON(!old_ns);
@@ -65,7 +51,7 @@ struct uts_namespace *copy_utsname(unsigned long flags,
 	if (!(flags & CLONE_NEWUTS))
 		return old_ns;
 
-	new_ns = clone_uts_ns(tsk, old_ns);
+	new_ns = clone_uts_ns(old_ns);
 
 	put_uts_ns(old_ns);
 	return new_ns;
@@ -76,6 +62,5 @@ void free_uts_ns(struct kref *kref)
 	struct uts_namespace *ns;
 
 	ns = container_of(kref, struct uts_namespace, kref);
-	put_user_ns(ns->user_ns);
 	kfree(ns);
 }

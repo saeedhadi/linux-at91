@@ -9,13 +9,13 @@
 #include <linux/vmalloc.h>
 #include <linux/cgroup.h>
 #include <linux/swapops.h>
-#include <linux/kmemleak.h>
 
-static void __meminit init_page_cgroup(struct page_cgroup *pc, unsigned long id)
+static void __meminit
+__init_page_cgroup(struct page_cgroup *pc, unsigned long pfn)
 {
 	pc->flags = 0;
-	set_page_cgroup_array_id(pc, id);
 	pc->mem_cgroup = NULL;
+	pc->page = pfn_to_page(pfn);
 	INIT_LIST_HEAD(&pc->lru);
 }
 static unsigned long total_usage;
@@ -42,19 +42,6 @@ struct page_cgroup *lookup_page_cgroup(struct page *page)
 	return base + offset;
 }
 
-struct page *lookup_cgroup_page(struct page_cgroup *pc)
-{
-	unsigned long pfn;
-	struct page *page;
-	pg_data_t *pgdat;
-
-	pgdat = NODE_DATA(page_cgroup_array_id(pc));
-	pfn = pc - pgdat->node_page_cgroup + pgdat->node_start_pfn;
-	page = pfn_to_page(pfn);
-	VM_BUG_ON(pc != lookup_page_cgroup(page));
-	return page;
-}
-
 static int __init alloc_node_page_cgroup(int nid)
 {
 	struct page_cgroup *base, *pc;
@@ -75,14 +62,14 @@ static int __init alloc_node_page_cgroup(int nid)
 		return -ENOMEM;
 	for (index = 0; index < nr_pages; index++) {
 		pc = base + index;
-		init_page_cgroup(pc, nid);
+		__init_page_cgroup(pc, start_pfn + index);
 	}
 	NODE_DATA(nid)->node_page_cgroup = base;
 	total_usage += table_size;
 	return 0;
 }
 
-void __init page_cgroup_init_flatmem(void)
+void __init page_cgroup_init(void)
 {
 
 	int nid, fail;
@@ -96,12 +83,12 @@ void __init page_cgroup_init_flatmem(void)
 			goto fail;
 	}
 	printk(KERN_INFO "allocated %ld bytes of page_cgroup\n", total_usage);
-	printk(KERN_INFO "please try 'cgroup_disable=memory' option if you"
-	" don't want memory cgroups\n");
+	printk(KERN_INFO "please try cgroup_disable=memory option if you"
+	" don't want\n");
 	return;
 fail:
-	printk(KERN_CRIT "allocation of page_cgroup failed.\n");
-	printk(KERN_CRIT "please try 'cgroup_disable=memory' boot option\n");
+	printk(KERN_CRIT "allocation of page_cgroup was failed.\n");
+	printk(KERN_CRIT "please try cgroup_disable=memory boot option\n");
 	panic("Out of memory");
 }
 
@@ -112,80 +99,42 @@ struct page_cgroup *lookup_page_cgroup(struct page *page)
 	unsigned long pfn = page_to_pfn(page);
 	struct mem_section *section = __pfn_to_section(pfn);
 
-	if (!section->page_cgroup)
-		return NULL;
 	return section->page_cgroup + pfn;
 }
 
-struct page *lookup_cgroup_page(struct page_cgroup *pc)
-{
-	struct mem_section *section;
-	struct page *page;
-	unsigned long nr;
-
-	nr = page_cgroup_array_id(pc);
-	section = __nr_to_section(nr);
-	page = pfn_to_page(pc - section->page_cgroup);
-	VM_BUG_ON(pc != lookup_page_cgroup(page));
-	return page;
-}
-
-static void *__init_refok alloc_page_cgroup(size_t size, int nid)
-{
-	void *addr = NULL;
-
-	addr = alloc_pages_exact_nid(nid, size, GFP_KERNEL | __GFP_NOWARN);
-	if (addr)
-		return addr;
-
-	if (node_state(nid, N_HIGH_MEMORY))
-		addr = vmalloc_node(size, nid);
-	else
-		addr = vmalloc(size);
-
-	return addr;
-}
-
-#ifdef CONFIG_MEMORY_HOTPLUG
-static void free_page_cgroup(void *addr)
-{
-	if (is_vmalloc_addr(addr)) {
-		vfree(addr);
-	} else {
-		struct page *page = virt_to_page(addr);
-		size_t table_size =
-			sizeof(struct page_cgroup) * PAGES_PER_SECTION;
-
-		BUG_ON(PageReserved(page));
-		free_pages_exact(addr, table_size);
-	}
-}
-#endif
-
+/* __alloc_bootmem...() is protected by !slab_available() */
 static int __init_refok init_section_page_cgroup(unsigned long pfn)
 {
+	struct mem_section *section = __pfn_to_section(pfn);
 	struct page_cgroup *base, *pc;
-	struct mem_section *section;
 	unsigned long table_size;
-	unsigned long nr;
 	int nid, index;
 
-	nr = pfn_to_section_nr(pfn);
-	section = __nr_to_section(nr);
-
-	if (section->page_cgroup)
-		return 0;
-
-	nid = page_to_nid(pfn_to_page(pfn));
-	table_size = sizeof(struct page_cgroup) * PAGES_PER_SECTION;
-	base = alloc_page_cgroup(table_size, nid);
-
-	/*
-	 * The value stored in section->page_cgroup is (base - pfn)
-	 * and it does not point to the memory block allocated above,
-	 * causing kmemleak false positives.
-	 */
-	kmemleak_not_leak(base);
+	if (!section->page_cgroup) {
+		nid = page_to_nid(pfn_to_page(pfn));
+		table_size = sizeof(struct page_cgroup) * PAGES_PER_SECTION;
+		if (slab_is_available()) {
+			base = kmalloc_node(table_size,
+					GFP_KERNEL | __GFP_NOWARN, nid);
+			if (!base)
+				base = vmalloc_node(table_size, nid);
+		} else {
+			base = __alloc_bootmem_node_nopanic(NODE_DATA(nid),
+				table_size,
+				PAGE_SIZE, __pa(MAX_DMA_ADDRESS));
+		}
+	} else {
+		/*
+ 		 * We don't have to allocate page_cgroup again, but
+		 * address of memmap may be changed. So, we have to initialize
+		 * again.
+		 */
+		base = section->page_cgroup + pfn;
+		table_size = 0;
+		/* check address of memmap is changed or not. */
+		if (base->page == pfn_to_page(pfn))
+			return 0;
+	}
 
 	if (!base) {
 		printk(KERN_ERR "page cgroup allocation failure\n");
@@ -194,7 +143,7 @@ static int __init_refok init_section_page_cgroup(unsigned long pfn)
 
 	for (index = 0; index < PAGES_PER_SECTION; index++) {
 		pc = base + index;
-		init_page_cgroup(pc, nr);
+		__init_page_cgroup(pc, pfn + index);
 	}
 
 	section->page_cgroup = base - pfn;
@@ -211,8 +160,16 @@ void __free_page_cgroup(unsigned long pfn)
 	if (!ms || !ms->page_cgroup)
 		return;
 	base = ms->page_cgroup + pfn;
-	free_page_cgroup(base);
-	ms->page_cgroup = NULL;
+	if (is_vmalloc_addr(base)) {
+		vfree(base);
+		ms->page_cgroup = NULL;
+	} else {
+		struct page *page = virt_to_page(base);
+		if (!PageReserved(page)) { /* Is bootmem ? */
+			kfree(base);
+			ms->page_cgroup = NULL;
+		}
+	}
 }
 
 int __meminit online_page_cgroup(unsigned long start_pfn,
@@ -276,7 +233,12 @@ static int __meminit page_cgroup_callback(struct notifier_block *self,
 		break;
 	}
 
-	return notifier_from_errno(ret);
+	if (ret)
+		ret = notifier_from_errno(ret);
+	else
+		ret = NOTIFY_OK;
+
+	return ret;
 }
 
 #endif
@@ -295,14 +257,14 @@ void __init page_cgroup_init(void)
 		fail = init_section_page_cgroup(pfn);
 	}
 	if (fail) {
-		printk(KERN_CRIT "try 'cgroup_disable=memory' boot option\n");
+		printk(KERN_CRIT "try cgroup_disable=memory boot option\n");
 		panic("Out of memory");
 	} else {
 		hotplug_memory_notifier(page_cgroup_callback, 0);
 	}
 	printk(KERN_INFO "allocated %ld bytes of page_cgroup\n", total_usage);
-	printk(KERN_INFO "please try 'cgroup_disable=memory' option if you don't"
-	" want memory cgroups\n");
+	printk(KERN_INFO "please try cgroup_disable=memory option if you don't"
+	" want\n");
 }
 
 void __meminit pgdat_page_cgroup_init(struct pglist_data *pgdat)
@@ -319,7 +281,6 @@ static DEFINE_MUTEX(swap_cgroup_mutex);
 struct swap_cgroup_ctrl {
 	struct page **map;
 	unsigned long length;
-	spinlock_t	lock;
 };
 
 struct swap_cgroup_ctrl swap_cgroup_ctrl[MAX_SWAPFILES];
@@ -353,6 +314,8 @@ static int swap_cgroup_prepare(int type)
 	struct swap_cgroup_ctrl *ctrl;
 	unsigned long idx, max;
 
+	if (!do_swap_account)
+		return 0;
 	ctrl = &swap_cgroup_ctrl[type];
 
 	for (idx = 0; idx < ctrl->length; idx++) {
@@ -368,43 +331,6 @@ not_enough_page:
 		__free_page(ctrl->map[idx]);
 
 	return -ENOMEM;
-}
-
-/**
- * swap_cgroup_cmpxchg - cmpxchg mem_cgroup's id for this swp_entry.
- * @end: swap entry to be cmpxchged
- * @old: old id
- * @new: new id
- *
- * Returns old id at success, 0 at failure.
- * (There is no mem_cgroup using 0 as its id)
- */
-unsigned short swap_cgroup_cmpxchg(swp_entry_t ent,
-					unsigned short old, unsigned short new)
-{
-	int type = swp_type(ent);
-	unsigned long offset = swp_offset(ent);
-	unsigned long idx = offset / SC_PER_PAGE;
-	unsigned long pos = offset & SC_POS_MASK;
-	struct swap_cgroup_ctrl *ctrl;
-	struct page *mappage;
-	struct swap_cgroup *sc;
-	unsigned long flags;
-	unsigned short retval;
-
-	ctrl = &swap_cgroup_ctrl[type];
-
-	mappage = ctrl->map[idx];
-	sc = page_address(mappage);
-	sc += pos;
-	spin_lock_irqsave(&ctrl->lock, flags);
-	retval = sc->id;
-	if (retval == old)
-		sc->id = new;
-	else
-		retval = 0;
-	spin_unlock_irqrestore(&ctrl->lock, flags);
-	return retval;
 }
 
 /**
@@ -425,17 +351,17 @@ unsigned short swap_cgroup_record(swp_entry_t ent, unsigned short id)
 	struct page *mappage;
 	struct swap_cgroup *sc;
 	unsigned short old;
-	unsigned long flags;
+
+	if (!do_swap_account)
+		return 0;
 
 	ctrl = &swap_cgroup_ctrl[type];
 
 	mappage = ctrl->map[idx];
 	sc = page_address(mappage);
 	sc += pos;
-	spin_lock_irqsave(&ctrl->lock, flags);
 	old = sc->id;
 	sc->id = id;
-	spin_unlock_irqrestore(&ctrl->lock, flags);
 
 	return old;
 }
@@ -456,6 +382,9 @@ unsigned short lookup_swap_cgroup(swp_entry_t ent)
 	struct page *mappage;
 	struct swap_cgroup *sc;
 	unsigned short ret;
+
+	if (!do_swap_account)
+		return 0;
 
 	ctrl = &swap_cgroup_ctrl[type];
 	mappage = ctrl->map[idx];
@@ -487,7 +416,6 @@ int swap_cgroup_swapon(int type, unsigned long max_pages)
 	mutex_lock(&swap_cgroup_mutex);
 	ctrl->length = length;
 	ctrl->map = array;
-	spin_lock_init(&ctrl->lock);
 	if (swap_cgroup_prepare(type)) {
 		/* memory shortage */
 		ctrl->map = NULL;

@@ -126,6 +126,26 @@ int clk_set_parent(struct clk *clk, struct clk *parent);
 struct clk *clk_get_parent(struct clk *clk);
 
 /**
+ * clk_must_disable - report whether a clock's users must disable it
+ * @clk: one node in the clock tree
+ *
+ * This routine returns true only if the upcoming system state requires
+ * disabling the specified clock.
+ *
+ * It's common for platform power states to constrain certain clocks (and
+ * their descendants) to be unavailable, while other states allow that
+ * clock to be active.  A platform's power states often include an "all on"
+ * mode; system wide sleep states like "standby" or "suspend-to-RAM"; and
+ * operating states which sacrifice functionality for lower power usage.
+ *
+ * The constraint value is commonly tested in device driver suspend(), to
+ * leave clocks active if they are needed for features like wakeup events.
+ * On platforms that support reduced functionality operating states, the
+ * constraint may also need to be tested during resume() and probe() calls.
+ */
+int clk_must_disable(struct clk *clk);
+
+/**
  * clk_get_sys - get a clock based upon the device name
  * @dev_id: device name
  * @con_id: connection ID
@@ -141,18 +161,5 @@ struct clk *clk_get_parent(struct clk *clk);
  * clk_get_sys should not be called from within interrupt context.
  */
 struct clk *clk_get_sys(const char *dev_id, const char *con_id);
-
-/**
- * clk_add_alias - add a new clock alias
- * @alias: name for clock alias
- * @alias_dev_name: device name
- * @id: platform specific clock name
- * @dev: device
- *
- * Allows using generic clock names for drivers by adding a new alias.
- * Assumes clkdev, see clkdev.h for more info.
- */
-int clk_add_alias(const char *alias, const char *alias_dev_name, char *id,
-			struct device *dev);
 
 #endif

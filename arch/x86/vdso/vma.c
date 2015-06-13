@@ -6,10 +6,8 @@
 #include <linux/mm.h>
 #include <linux/err.h>
 #include <linux/sched.h>
-#include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/random.h>
-#include <linux/elf.h>
 #include <asm/vsyscall.h>
 #include <asm/vgtod.h>
 #include <asm/proto.h>
@@ -67,7 +65,6 @@ static int __init init_vdso_vars(void)
 	*(typeof(__ ## x) **) var_ref(VDSO64_SYMBOL(vbase, x), #x) = &__ ## x;
 #include "vextern.h"
 #undef VEXTERN
-	vunmap(vbase);
 	return 0;
 
  oom:
@@ -75,7 +72,7 @@ static int __init init_vdso_vars(void)
 	vdso_enabled = 0;
 	return -ENOMEM;
 }
-subsys_initcall(init_vdso_vars);
+__initcall(init_vdso_vars);
 
 struct linux_binprm;
 
@@ -118,18 +115,15 @@ int arch_setup_additional_pages(struct linux_binprm *bprm, int uses_interp)
 		goto up_fail;
 	}
 
-	current->mm->context.vdso = (void *)addr;
-
 	ret = install_special_mapping(mm, addr, vdso_size,
 				      VM_READ|VM_EXEC|
 				      VM_MAYREAD|VM_MAYWRITE|VM_MAYEXEC|
 				      VM_ALWAYSDUMP,
 				      vdso_pages);
-	if (ret) {
-		current->mm->context.vdso = NULL;
+	if (ret)
 		goto up_fail;
-	}
 
+	current->mm->context.vdso = (void *)addr;
 up_fail:
 	up_write(&mm->mmap_sem);
 	return ret;

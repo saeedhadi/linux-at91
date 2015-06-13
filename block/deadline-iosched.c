@@ -138,7 +138,7 @@ deadline_merge(struct request_queue *q, struct request **req, struct bio *bio)
 
 		__rq = elv_rb_find(&dd->sort_list[bio_data_dir(bio)], sector);
 		if (__rq) {
-			BUG_ON(sector != blk_rq_pos(__rq));
+			BUG_ON(sector != __rq->sector);
 
 			if (elv_rq_merge_ok(__rq, bio)) {
 				ret = ELEVATOR_FRONT_MERGE;
@@ -326,6 +326,14 @@ dispatch_request:
 	return 1;
 }
 
+static int deadline_queue_empty(struct request_queue *q)
+{
+	struct deadline_data *dd = q->elevator->elevator_data;
+
+	return list_empty(&dd->fifo_list[WRITE])
+		&& list_empty(&dd->fifo_list[READ]);
+}
+
 static void deadline_exit_queue(struct elevator_queue *e)
 {
 	struct deadline_data *dd = e->elevator_data;
@@ -437,6 +445,7 @@ static struct elevator_type iosched_deadline = {
 		.elevator_merge_req_fn =	deadline_merged_requests,
 		.elevator_dispatch_fn =		deadline_dispatch_requests,
 		.elevator_add_req_fn =		deadline_add_request,
+		.elevator_queue_empty_fn =	deadline_queue_empty,
 		.elevator_former_req_fn =	elv_rb_former_request,
 		.elevator_latter_req_fn =	elv_rb_latter_request,
 		.elevator_init_fn =		deadline_init_queue,

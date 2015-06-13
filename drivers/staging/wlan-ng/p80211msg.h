@@ -48,12 +48,19 @@
 #ifndef _P80211MSG_H
 #define _P80211MSG_H
 
+/*================================================================*/
+/* Project Includes */
+
+
 #define WLAN_DEVNAMELEN_MAX	16
 
-struct p80211msg {
+/*--------------------------------------------------------------------*/
+/* Prototype msg type */
+
+typedef struct p80211msg {
 	u32 msgcode;
 	u32 msglen;
 	u8 devname[WLAN_DEVNAMELEN_MAX];
-} __packed;
+} __attribute__ ((packed)) p80211msg_t;
 
 #endif /* _P80211MSG_H */

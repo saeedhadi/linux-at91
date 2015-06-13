@@ -171,22 +171,25 @@ struct icmp6_filter {
 #ifdef __KERNEL__
 
 #include <linux/netdevice.h>
+#include <linux/skbuff.h>
+
 
 extern void				icmpv6_send(struct sk_buff *skb,
-						    u8 type, u8 code,
-						    __u32 info);
+						    int type, int code,
+						    __u32 info, 
+						    struct net_device *dev);
 
 extern int				icmpv6_init(void);
-extern int				icmpv6_err_convert(u8 type, u8 code,
+extern int				icmpv6_err_convert(int type, int code,
 							   int *err);
 extern void				icmpv6_cleanup(void);
 extern void				icmpv6_param_prob(struct sk_buff *skb,
-							  u8 code, int pos);
+							  int code, int pos);
 
-struct flowi6;
+struct flowi;
 struct in6_addr;
 extern void				icmpv6_flow_init(struct sock *sk,
-							 struct flowi6 *fl6,
+							 struct flowi *fl,
 							 u8 type,
 							 const struct in6_addr *saddr,
 							 const struct in6_addr *daddr,

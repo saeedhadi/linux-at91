@@ -16,7 +16,6 @@
 #include <linux/delay.h>
 #include <linux/rio.h>
 #include <linux/rio_drv.h>
-#include <linux/slab.h>
 #include <linux/rio_ids.h>
 
 #include <linux/netdevice.h>
@@ -73,7 +72,7 @@ static int rionet_check = 0;
 static int rionet_capable = 1;
 
 /*
- * This is a fast lookup table for translating TX
+ * This is a fast lookup table for for translating TX
  * Ethernet packets into a destination RIO device. It
  * could be made into a hash table to save memory depending
  * on system trade-offs.
@@ -115,6 +114,11 @@ static int rionet_rx_clean(struct net_device *ndev)
 
 		if (error == NET_RX_DROP) {
 			ndev->stats.rx_dropped++;
+		} else if (error == NET_RX_BAD) {
+			if (netif_msg_rx_err(rnet))
+				printk(KERN_WARNING "%s: bad rx packet\n",
+				       DRV_NAME);
+			ndev->stats.rx_errors++;
 		} else {
 			ndev->stats.rx_packets++;
 			ndev->stats.rx_bytes += RIO_MAX_MSG_SIZE;
@@ -204,7 +208,7 @@ static int rionet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 
 	spin_unlock_irqrestore(&rnet->tx_lock, flags);
 
-	return NETDEV_TX_OK;
+	return 0;
 }
 
 static void rionet_dbell_event(struct rio_mport *mport, void *dev_id, u16 sid, u16 tid,
@@ -382,9 +386,9 @@ static void rionet_remove(struct rio_dev *rdev)
 	struct rionet_peer *peer, *tmp;
 
 	free_pages((unsigned long)rionet_active, rdev->net->hport->sys_size ?
-					__fls(sizeof(void *)) + 4 : 0);
+					__ilog2(sizeof(void *)) + 4 : 0);
 	unregister_netdev(ndev);
-	free_netdev(ndev);
+	kfree(ndev);
 
 	list_for_each_entry_safe(peer, tmp, &rionet_peers, node) {
 		list_del(&peer->node);
@@ -424,15 +428,6 @@ static const struct ethtool_ops rionet_ethtool_ops = {
 	.get_link = ethtool_op_get_link,
 };
 
-static const struct net_device_ops rionet_netdev_ops = {
-	.ndo_open		= rionet_open,
-	.ndo_stop		= rionet_close,
-	.ndo_start_xmit		= rionet_start_xmit,
-	.ndo_change_mtu		= eth_change_mtu,
-	.ndo_validate_addr	= eth_validate_addr,
-	.ndo_set_mac_address	= eth_mac_addr,
-};
-
 static int rionet_setup_netdev(struct rio_mport *mport)
 {
 	int rc = 0;
@@ -450,7 +445,7 @@ static int rionet_setup_netdev(struct rio_mport *mport)
 	}
 
 	rionet_active = (struct rio_dev **)__get_free_pages(GFP_KERNEL,
-			mport->sys_size ? __fls(sizeof(void *)) + 4 : 0);
+			mport->sys_size ? __ilog2(sizeof(void *)) + 4 : 0);
 	if (!rionet_active) {
 		rc = -ENOMEM;
 		goto out;
@@ -471,7 +466,10 @@ static int rionet_setup_netdev(struct rio_mport *mport)
 	ndev->dev_addr[4] = device_id >> 8;
 	ndev->dev_addr[5] = device_id & 0xff;
 
-	ndev->netdev_ops = &rionet_netdev_ops;
+	/* Fill in the driver function table */
+	ndev->open = &rionet_open;
+	ndev->hard_start_xmit = &rionet_start_xmit;
+	ndev->stop = &rionet_close;
 	ndev->mtu = RIO_MAX_MSG_SIZE - 14;
 	ndev->features = NETIF_F_LLTX;
 	SET_ETHTOOL_OPS(ndev, &rionet_ethtool_ops);
@@ -571,5 +569,5 @@ static void __exit rionet_exit(void)
 	rio_unregister_driver(&rionet_driver);
 }
 
-late_initcall(rionet_init);
+module_init(rionet_init);
 module_exit(rionet_exit);

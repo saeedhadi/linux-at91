@@ -1,25 +1,11 @@
 /*
  * MTD device concatenation layer
  *
- * Copyright © 2002 Robert Kaiser <rkaiser@sysgo.de>
- * Copyright © 2002-2010 David Woodhouse <dwmw2@infradead.org>
+ * (C) 2002 Robert Kaiser <rkaiser@sysgo.de>
  *
  * NAND support by Christian Gan <cgan@iders.ca>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
- *
+ * This code is GPL
  */
 
 #include <linux/kernel.h>
@@ -197,9 +183,10 @@ concat_writev(struct mtd_info *mtd, const struct kvec *vecs,
 	}
 
 	/* make a copy of vecs */
-	vecs_copy = kmemdup(vecs, sizeof(struct kvec) * count, GFP_KERNEL);
+	vecs_copy = kmalloc(sizeof(struct kvec) * count, GFP_KERNEL);
 	if (!vecs_copy)
 		return -ENOMEM;
+	memcpy(vecs_copy, vecs, sizeof(struct kvec) * count);
 
 	entry_low = 0;
 	for (i = 0; i < concat->num_subdev; i++) {
@@ -440,7 +427,7 @@ static int concat_erase(struct mtd_info *mtd, struct erase_info *instr)
 		 * to-be-erased area begins. Verify that the starting
 		 * offset is aligned to this region's erase size:
 		 */
-		if (i < 0 || instr->addr & (erase_regions[i].erasesize - 1))
+		if (instr->addr & (erase_regions[i].erasesize - 1))
 			return -EINVAL;
 
 		/*
@@ -453,8 +440,8 @@ static int concat_erase(struct mtd_info *mtd, struct erase_info *instr)
 		/*
 		 * check if the ending offset is aligned to this region's erase size
 		 */
-		if (i < 0 || ((instr->addr + instr->len) &
-					(erase_regions[i].erasesize - 1)))
+		if ((instr->addr + instr->len) & (erase_regions[i].erasesize -
+						  1))
 			return -EINVAL;
 	}
 
@@ -554,12 +541,10 @@ static int concat_lock(struct mtd_info *mtd, loff_t ofs, uint64_t len)
 		else
 			size = len;
 
-		if (subdev->lock) {
-			err = subdev->lock(subdev, ofs, size);
-			if (err)
-				break;
-		} else
-			err = -EOPNOTSUPP;
+		err = subdev->lock(subdev, ofs, size);
+
+		if (err)
+			break;
 
 		len -= size;
 		if (len == 0)
@@ -594,12 +579,10 @@ static int concat_unlock(struct mtd_info *mtd, loff_t ofs, uint64_t len)
 		else
 			size = len;
 
-		if (subdev->unlock) {
-			err = subdev->unlock(subdev, ofs, size);
-			if (err)
-				break;
-		} else
-			err = -EOPNOTSUPP;
+		err = subdev->unlock(subdev, ofs, size);
+
+		if (err)
+			break;
 
 		len -= size;
 		if (len == 0)
@@ -750,7 +733,6 @@ struct mtd_info *mtd_concat_create(struct mtd_info *subdev[],	/* subdevices to c
 	struct mtd_concat *concat;
 	uint32_t max_erasesize, curr_erasesize;
 	int num_erase_region;
-	int max_writebufsize = 0;
 
 	printk(KERN_NOTICE "Concatenating MTD devices:\n");
 	for (i = 0; i < num_devs; i++)
@@ -777,12 +759,6 @@ struct mtd_info *mtd_concat_create(struct mtd_info *subdev[],	/* subdevices to c
 	concat->mtd.size = subdev[0]->size;
 	concat->mtd.erasesize = subdev[0]->erasesize;
 	concat->mtd.writesize = subdev[0]->writesize;
-
-	for (i = 0; i < num_devs; i++)
-		if (max_writebufsize < subdev[i]->writebufsize)
-			max_writebufsize = subdev[i]->writebufsize;
-	concat->mtd.writebufsize = max_writebufsize;
-
 	concat->mtd.subpage_sft = subdev[0]->subpage_sft;
 	concat->mtd.oobsize = subdev[0]->oobsize;
 	concat->mtd.oobavail = subdev[0]->oobavail;

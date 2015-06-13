@@ -100,10 +100,9 @@ static unsigned int __init estimate_cpu_frequency(void)
 	return count;
 }
 
-void read_persistent_clock(struct timespec *ts)
+unsigned long read_persistent_clock(void)
 {
-	ts->tv_sec = mc146818_get_cmos_time();
-	ts->tv_nsec = 0;
+	return mc146818_get_cmos_time();
 }
 
 static void __init plat_perf_setup(void)
@@ -119,7 +118,7 @@ static void __init plat_perf_setup(void)
 			set_vi_handler(cp0_perfcount_irq, mips_perf_dispatch);
 		mips_cpu_perf_irq = MIPS_CPU_IRQ_BASE + cp0_perfcount_irq;
 #ifdef CONFIG_SMP
-		irq_set_handler(mips_cpu_perf_irq, handle_percpu_irq);
+		set_irq_handler(mips_cpu_perf_irq, handle_percpu_irq);
 #endif
 	}
 }

@@ -6,6 +6,7 @@
 
 #include <linux/syscalls.h>
 #include <linux/mm.h>
+#include <linux/smp_lock.h>
 #include <linux/capability.h>
 #include <linux/file.h>
 #include <linux/fs.h>
@@ -14,7 +15,6 @@
 #include <linux/uaccess.h>
 #include <linux/writeback.h>
 #include <linux/buffer_head.h>
-#include <linux/falloc.h>
 
 #include <asm/ioctls.h>
 
@@ -28,6 +28,7 @@
  * @arg:	command-specific argument for ioctl
  *
  * Invokes filesystem specific ->unlocked_ioctl, if one exists; otherwise
+ * invokes filesystem specific ->ioctl method.  If neither method exists,
  * returns -ENOTTY.
  *
  * Returns 0 on success, -errno on error.
@@ -37,12 +38,21 @@ static long vfs_ioctl(struct file *filp, unsigned int cmd,
 {
 	int error = -ENOTTY;
 
-	if (!filp->f_op || !filp->f_op->unlocked_ioctl)
+	if (!filp->f_op)
 		goto out;
 
-	error = filp->f_op->unlocked_ioctl(filp, cmd, arg);
-	if (error == -ENOIOCTLCMD)
-		error = -EINVAL;
+	if (filp->f_op->unlocked_ioctl) {
+		error = filp->f_op->unlocked_ioctl(filp, cmd, arg);
+		if (error == -ENOIOCTLCMD)
+			error = -EINVAL;
+		goto out;
+	} else if (filp->f_op->ioctl) {
+		lock_kernel();
+		error = filp->f_op->ioctl(filp->f_path.dentry->d_inode,
+					  filp, cmd, arg);
+		unlock_kernel();
+	}
+
  out:
 	return error;
 }
@@ -60,7 +70,9 @@ static int ioctl_fibmap(struct file *filp, int __user *p)
 	res = get_user(block, p);
 	if (res)
 		return res;
+	lock_kernel();
 	res = mapping->a_ops->bmap(mapping, block);
+	unlock_kernel();
 	return put_user(res, p);
 }
 
@@ -86,7 +98,7 @@ int fiemap_fill_next_extent(struct fiemap_extent_info *fieinfo, u64 logical,
 			    u64 phys, u64 len, u32 flags)
 {
 	struct fiemap_extent extent;
-	struct fiemap_extent __user *dest = fieinfo->fi_extents_start;
+	struct fiemap_extent *dest = fieinfo->fi_extents_start;
 
 	/* only count the extents */
 	if (fieinfo->fi_extents_max == 0) {
@@ -151,21 +163,20 @@ EXPORT_SYMBOL(fiemap_check_flags);
 static int fiemap_check_ranges(struct super_block *sb,
 			       u64 start, u64 len, u64 *new_len)
 {
-	u64 maxbytes = (u64) sb->s_maxbytes;
-
 	*new_len = len;
 
 	if (len == 0)
 		return -EINVAL;
 
-	if (start > maxbytes)
+	if (start > sb->s_maxbytes)
 		return -EFBIG;
 
 	/*
 	 * Shrink request scope to what the fs can actually handle.
 	 */
-	if (len > maxbytes || (maxbytes - len) < start)
-		*new_len = maxbytes - start;
+	if ((len > sb->s_maxbytes) ||
+	    (sb->s_maxbytes - len) < start)
+		*new_len = sb->s_maxbytes - start;
 
 	return 0;
 }
@@ -173,7 +184,6 @@ static int fiemap_check_ranges(struct super_block *sb,
 static int ioctl_fiemap(struct file *filp, unsigned long arg)
 {
 	struct fiemap fiemap;
-	struct fiemap __user *ufiemap = (struct fiemap __user *) arg;
 	struct fiemap_extent_info fieinfo = { 0, };
 	struct inode *inode = filp->f_path.dentry->d_inode;
 	struct super_block *sb = inode->i_sb;
@@ -183,7 +193,8 @@ static int ioctl_fiemap(struct file *filp, unsigned long arg)
 	if (!inode->i_op->fiemap)
 		return -EOPNOTSUPP;
 
-	if (copy_from_user(&fiemap, ufiemap, sizeof(fiemap)))
+	if (copy_from_user(&fiemap, (struct fiemap __user *)arg,
+			   sizeof(struct fiemap)))
 		return -EFAULT;
 
 	if (fiemap.fm_extent_count > FIEMAP_MAX_EXTENTS)
@@ -196,7 +207,7 @@ static int ioctl_fiemap(struct file *filp, unsigned long arg)
 
 	fieinfo.fi_flags = fiemap.fm_flags;
 	fieinfo.fi_extents_max = fiemap.fm_extent_count;
-	fieinfo.fi_extents_start = ufiemap->fm_extents;
+	fieinfo.fi_extents_start = (struct fiemap_extent *)(arg + sizeof(fiemap));
 
 	if (fiemap.fm_extent_count != 0 &&
 	    !access_ok(VERIFY_WRITE, fieinfo.fi_extents_start,
@@ -209,7 +220,7 @@ static int ioctl_fiemap(struct file *filp, unsigned long arg)
 	error = inode->i_op->fiemap(inode, &fieinfo, fiemap.fm_start, len);
 	fiemap.fm_flags = fieinfo.fi_flags;
 	fiemap.fm_mapped_extents = fieinfo.fi_extents_mapped;
-	if (copy_to_user(ufiemap, &fiemap, sizeof(fiemap)))
+	if (copy_to_user((char *)arg, &fiemap, sizeof(fiemap)))
 		error = -EFAULT;
 
 	return error;
@@ -217,23 +228,14 @@ static int ioctl_fiemap(struct file *filp, unsigned long arg)
 
 #ifdef CONFIG_BLOCK
 
-static inline sector_t logical_to_blk(struct inode *inode, loff_t offset)
-{
-	return (offset >> inode->i_blkbits);
-}
-
-static inline loff_t blk_to_logical(struct inode *inode, sector_t blk)
-{
-	return (blk << inode->i_blkbits);
-}
+#define blk_to_logical(inode, blk) (blk << (inode)->i_blkbits)
+#define logical_to_blk(inode, offset) (offset >> (inode)->i_blkbits);
 
 /**
  * __generic_block_fiemap - FIEMAP for block based inodes (no locking)
- * @inode: the inode to map
- * @fieinfo: the fiemap info struct that will be passed back to userspace
- * @start: where to start mapping in the inode
- * @len: how much space to map
- * @get_block: the fs's get_block function
+ * @inode - the inode to map
+ * @arg - the pointer to userspace where we copy everything to
+ * @get_block - the fs's get_block function
  *
  * This does FIEMAP for block based inodes.  Basically it will just loop
  * through get_block until we hit the number of extents we want to map, or we
@@ -248,70 +250,58 @@ static inline loff_t blk_to_logical(struct inode *inode, sector_t blk)
  */
 
 int __generic_block_fiemap(struct inode *inode,
-			   struct fiemap_extent_info *fieinfo, loff_t start,
-			   loff_t len, get_block_t *get_block)
+			   struct fiemap_extent_info *fieinfo, u64 start,
+			   u64 len, get_block_t *get_block)
 {
-	struct buffer_head map_bh;
-	sector_t start_blk, last_blk;
-	loff_t isize = i_size_read(inode);
+	struct buffer_head tmp;
+	unsigned int start_blk;
+	long long length = 0, map_len = 0;
 	u64 logical = 0, phys = 0, size = 0;
 	u32 flags = FIEMAP_EXTENT_MERGED;
-	bool past_eof = false, whole_file = false;
-	int ret = 0;
+	int ret = 0, past_eof = 0, whole_file = 0;
 
-	ret = fiemap_check_flags(fieinfo, FIEMAP_FLAG_SYNC);
-	if (ret)
+	if ((ret = fiemap_check_flags(fieinfo, FIEMAP_FLAG_SYNC)))
 		return ret;
 
-	/*
-	 * Either the i_mutex or other appropriate locking needs to be held
-	 * since we expect isize to not change at all through the duration of
-	 * this call.
-	 */
-	if (len >= isize) {
-		whole_file = true;
-		len = isize;
-	}
-
-	/*
-	 * Some filesystems can't deal with being asked to map less than
-	 * blocksize, so make sure our len is at least block length.
-	 */
-	if (logical_to_blk(inode, len) == 0)
-		len = blk_to_logical(inode, 1);
-
 	start_blk = logical_to_blk(inode, start);
-	last_blk = logical_to_blk(inode, start + len - 1);
+
+	length = (long long)min_t(u64, len, i_size_read(inode));
+	if (length < len)
+		whole_file = 1;
+
+	map_len = length;
 
 	do {
 		/*
 		 * we set b_size to the total size we want so it will map as
 		 * many contiguous blocks as possible at once
 		 */
-		memset(&map_bh, 0, sizeof(struct buffer_head));
-		map_bh.b_size = len;
+		memset(&tmp, 0, sizeof(struct buffer_head));
+		tmp.b_size = map_len;
 
-		ret = get_block(inode, start_blk, &map_bh, 0);
+		ret = get_block(inode, start_blk, &tmp, 0);
 		if (ret)
 			break;
 
 		/* HOLE */
-		if (!buffer_mapped(&map_bh)) {
+		if (!buffer_mapped(&tmp)) {
+			length -= blk_to_logical(inode, 1);
 			start_blk++;
 
 			/*
-			 * We want to handle the case where there is an
+			 * we want to handle the case where there is an
 			 * allocated block at the front of the file, and then
 			 * nothing but holes up to the end of the file properly,
 			 * to make sure that extent at the front gets properly
 			 * marked with FIEMAP_EXTENT_LAST
 			 */
 			if (!past_eof &&
-			    blk_to_logical(inode, start_blk) >= isize)
+			    blk_to_logical(inode, start_blk) >=
+			    blk_to_logical(inode, 0)+i_size_read(inode))
 				past_eof = 1;
 
 			/*
-			 * First hole after going past the EOF, this is our
+			 * first hole after going past the EOF, this is our
 			 * last extent
 			 */
 			if (past_eof && size) {
@@ -319,18 +309,15 @@ int __generic_block_fiemap(struct inode *inode,
 				ret = fiemap_fill_next_extent(fieinfo, logical,
 							      phys, size,
 							      flags);
-			} else if (size) {
-				ret = fiemap_fill_next_extent(fieinfo, logical,
-							      phys, size, flags);
-				size = 0;
+				break;
 			}
 
 			/* if we have holes up to/past EOF then we're done */
-			if (start_blk > last_blk || past_eof || ret)
+			if (length <= 0 || past_eof)
 				break;
 		} else {
 			/*
-			 * We have gone over the length of what we wanted to
+			 * we have gone over the length of what we wanted to
 			 * map, and it wasn't the entire file, so add the extent
 			 * we got last time and exit.
 			 *
@@ -344,7 +331,7 @@ int __generic_block_fiemap(struct inode *inode,
 			 * are good to go, just add the extent to the fieinfo
 			 * and break
 			 */
-			if (start_blk > last_blk && !whole_file) {
+			if (length <= 0 && !whole_file) {
 				ret = fiemap_fill_next_extent(fieinfo, logical,
 							      phys, size,
 							      flags);
@@ -364,10 +351,11 @@ int __generic_block_fiemap(struct inode *inode,
 			}
 
 			logical = blk_to_logical(inode, start_blk);
-			phys = blk_to_logical(inode, map_bh.b_blocknr);
-			size = map_bh.b_size;
+			phys = blk_to_logical(inode, tmp.b_blocknr);
+			size = tmp.b_size;
 			flags = FIEMAP_EXTENT_MERGED;
 
+			length -= tmp.b_size;
 			start_blk += logical_to_blk(inode, size);
 
 			/*
@@ -375,13 +363,15 @@ int __generic_block_fiemap(struct inode *inode,
 			 * soon as we find a hole that the last extent we found
 			 * is marked with FIEMAP_EXTENT_LAST
 			 */
-			if (!past_eof && logical + size >= isize)
-				past_eof = true;
+			if (!past_eof &&
+			    logical+size >=
+			    blk_to_logical(inode, 0)+i_size_read(inode))
+				past_eof = 1;
 		}
 		cond_resched();
 	} while (1);
 
-	/* If ret is 1 then we just hit the end of the extent array */
+	/* if ret is 1 then we just hit the end of the extent array */
 	if (ret == 1)
 		ret = 0;
 
@@ -415,37 +405,6 @@ EXPORT_SYMBOL(generic_block_fiemap);
 
 #endif  /*  CONFIG_BLOCK  */
 
-/*
- * This provides compatibility with legacy XFS pre-allocation ioctls
- * which predate the fallocate syscall.
- *
- * Only the l_start, l_len and l_whence fields of the 'struct space_resv'
- * are used here, rest are ignored.
- */
-int ioctl_preallocate(struct file *filp, void __user *argp)
-{
-	struct inode *inode = filp->f_path.dentry->d_inode;
-	struct space_resv sr;
-
-	if (copy_from_user(&sr, argp, sizeof(sr)))
-		return -EFAULT;
-
-	switch (sr.l_whence) {
-	case SEEK_SET:
-		break;
-	case SEEK_CUR:
-		sr.l_start += filp->f_pos;
-		break;
-	case SEEK_END:
-		sr.l_start += i_size_read(inode);
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	return do_fallocate(filp, FALLOC_FL_KEEP_SIZE, sr.l_start, sr.l_len);
-}
-
 static int file_ioctl(struct file *filp, unsigned int cmd,
 		unsigned long arg)
 {
@@ -455,11 +414,12 @@ static int file_ioctl(struct file *filp, unsigned int cmd,
 	switch (cmd) {
 	case FIBMAP:
 		return ioctl_fibmap(filp, p);
+	case FS_IOC_FIEMAP:
+		return ioctl_fiemap(filp, arg);
+	case FIGETBSZ:
+		return put_user(inode->i_sb->s_blocksize, p);
 	case FIONREAD:
 		return put_user(i_size_read(inode) - filp->f_pos, p);
-	case FS_IOC_RESVSP:
-	case FS_IOC_RESVSP64:
-		return ioctl_preallocate(filp, p);
 	}
 
 	return vfs_ioctl(filp, cmd, arg);
@@ -521,8 +481,15 @@ static int ioctl_fsfreeze(struct file *filp)
 	if (sb->s_op->freeze_fs == NULL)
 		return -EOPNOTSUPP;
 
+	/* If a blockdevice-backed filesystem isn't specified, return. */
+	if (sb->s_bdev == NULL)
+		return -EINVAL;
+
 	/* Freeze */
-	return freeze_super(sb);
+	sb = freeze_bdev(sb->s_bdev);
+	if (IS_ERR(sb))
+		return PTR_ERR(sb);
+	return 0;
 }
 
 static int ioctl_fsthaw(struct file *filp)
@@ -532,8 +499,12 @@ static int ioctl_fsthaw(struct file *filp)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
+	/* If a blockdevice-backed filesystem isn't specified, return EINVAL. */
+	if (sb->s_bdev == NULL)
+		return -EINVAL;
+
 	/* Thaw */
-	return thaw_super(sb);
+	return thaw_bdev(sb->s_bdev, sb);
 }
 
 /*
@@ -548,7 +519,6 @@ int do_vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd,
 {
 	int error = 0;
 	int __user *argp = (int __user *)arg;
-	struct inode *inode = filp->f_path.dentry->d_inode;
 
 	switch (cmd) {
 	case FIOCLEX:
@@ -568,11 +538,13 @@ int do_vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd,
 		break;
 
 	case FIOQSIZE:
-		if (S_ISDIR(inode->i_mode) || S_ISREG(inode->i_mode) ||
-		    S_ISLNK(inode->i_mode)) {
-			loff_t res = inode_get_bytes(inode);
-			error = copy_to_user(argp, &res, sizeof(res)) ?
-					-EFAULT : 0;
+		if (S_ISDIR(filp->f_path.dentry->d_inode->i_mode) ||
+		    S_ISREG(filp->f_path.dentry->d_inode->i_mode) ||
+		    S_ISLNK(filp->f_path.dentry->d_inode->i_mode)) {
+			loff_t res =
+				inode_get_bytes(filp->f_path.dentry->d_inode);
+			error = copy_to_user((loff_t __user *)arg, &res,
+					     sizeof(res)) ? -EFAULT : 0;
 		} else
 			error = -ENOTTY;
 		break;
@@ -585,14 +557,8 @@ int do_vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd,
 		error = ioctl_fsthaw(filp);
 		break;
 
-	case FS_IOC_FIEMAP:
-		return ioctl_fiemap(filp, arg);
-
-	case FIGETBSZ:
-		return put_user(inode->i_sb->s_blocksize, argp);
-
 	default:
-		if (S_ISREG(inode->i_mode))
+		if (S_ISREG(filp->f_path.dentry->d_inode->i_mode))
 			error = file_ioctl(filp, cmd, arg);
 		else
 			error = vfs_ioctl(filp, cmd, arg);

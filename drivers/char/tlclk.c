@@ -32,12 +32,11 @@
 #include <linux/kernel.h>	/* printk() */
 #include <linux/fs.h>		/* everything... */
 #include <linux/errno.h>	/* error codes */
-#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/ioport.h>
 #include <linux/interrupt.h>
 #include <linux/spinlock.h>
-#include <linux/mutex.h>
+#include <linux/smp_lock.h>
 #include <linux/timer.h>
 #include <linux/sysfs.h>
 #include <linux/device.h>
@@ -206,7 +205,7 @@ static int tlclk_open(struct inode *inode, struct file *filp)
 {
 	int result;
 
-	mutex_lock(&tlclk_mutex);
+	lock_kernel();
 	if (test_and_set_bit(0, &useflags)) {
 		result = -EBUSY;
 		/* this legacy device is always one per system and it doesn't
@@ -229,7 +228,7 @@ static int tlclk_open(struct inode *inode, struct file *filp)
 		inb(TLCLK_REG6);	/* Clear interrupt events */
 
 out:
-	mutex_unlock(&tlclk_mutex);
+	unlock_kernel();
 	return result;
 }
 
@@ -267,7 +266,6 @@ static const struct file_operations tlclk_fops = {
 	.read = tlclk_read,
 	.open = tlclk_open,
 	.release = tlclk_release,
-	.llseek = noop_llseek,
 
 };
 

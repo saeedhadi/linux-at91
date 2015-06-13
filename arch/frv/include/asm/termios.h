@@ -52,7 +52,7 @@ struct termio {
 /* ioctl (fd, TIOCSERGETLSR, &result) where result may be as below */
 
 #ifdef __KERNEL__
-#include <asm-generic/termios-base.h>
+#include <asm-generic/termios.h>
 #endif
 
 #endif /* _ASM_TERMIOS_H */

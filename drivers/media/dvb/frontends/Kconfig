@@ -1,7 +1,7 @@
 config DVB_FE_CUSTOMISE
 	bool "Customise the frontend modules to build"
 	depends on DVB_CORE
-	default y if EXPERT
+	default N
 	help
 	  This allows the user to select/deselect frontend drivers for their
 	  hardware from the build.
@@ -12,8 +12,9 @@ config DVB_FE_CUSTOMISE
 
 	  If unsure say N.
 
+if DVB_FE_CUSTOMISE
+
 menu "Customise DVB Frontends"
-	visible if DVB_FE_CUSTOMISE
 
 comment "Multistandard (satellite) frontends"
 	depends on DVB_CORE
@@ -33,21 +34,6 @@ config DVB_STB6100
 	help
 	  A Silicon tuner from ST used in conjunction with the STB0899
 	  demodulator. Say Y when you want to support this tuner.
-
-config DVB_STV090x
-	tristate "STV0900/STV0903(A/B) based"
-	depends on DVB_CORE && I2C
-	default m if DVB_FE_CUSTOMISE
-	help
-	  DVB-S/S2/DSS Multistandard Professional/Broadcast demodulators.
-	  Say Y when you want to support these frontends.
-
-config DVB_STV6110x
-	tristate "STV6110/(A) based tuners"
-	depends on DVB_CORE && I2C
-	default m if DVB_FE_CUSTOMISE
-	help
-	  A Silicon tuner that supports DVB-S and DVB-S2 modes
 
 comment "DVB-S (satellite) frontends"
 	depends on DVB_CORE
@@ -75,13 +61,6 @@ config DVB_MT312
 
 config DVB_ZL10036
 	tristate "Zarlink ZL10036 silicon tuner"
-	depends on DVB_CORE && I2C
-	default m if DVB_FE_CUSTOMISE
-	help
-	  A DVB-S tuner module. Say Y when you want to support this frontend.
-
-config DVB_ZL10039
-	tristate "Zarlink ZL10039 silicon tuner"
 	depends on DVB_CORE && I2C
 	default m if DVB_FE_CUSTOMISE
 	help
@@ -200,21 +179,6 @@ config DVB_SI21XX
 	help
 	  A DVB-S tuner module. Say Y when you want to support this frontend.
 
-config DVB_DS3000
-	tristate "Montage Tehnology DS3000 based"
-	depends on DVB_CORE && I2C
-	default m if DVB_FE_CUSTOMISE
-	help
-	  A DVB-S/S2 tuner module. Say Y when you want to support this frontend.
-
-config DVB_MB86A16
-	tristate "Fujitsu MB86A16 based"
-	depends on DVB_CORE && I2C
-	default m if DVB_FE_CUSTOMISE
-	help
-	  A DVB-S/DSS Direct Conversion reveiver.
-	  Say Y when you want to support this frontend.
-
 comment "DVB-T (terrestrial) frontends"
 	depends on DVB_CORE
 
@@ -251,13 +215,6 @@ config DVB_CX22700
 
 config DVB_CX22702
 	tristate "Conexant cx22702 demodulator (OFDM)"
-	depends on DVB_CORE && I2C
-	default m if DVB_FE_CUSTOMISE
-	help
-	  A DVB-T tuner module. Say Y when you want to support this frontend.
-
-config DVB_S5H1432
-	tristate "Samsung s5h1432 demodulator (OFDM)"
 	depends on DVB_CORE && I2C
 	default m if DVB_FE_CUSTOMISE
 	help
@@ -349,14 +306,6 @@ config DVB_DIB7000P
 	  A DVB-T tuner module. Designed for mobile usage. Say Y when you want
 	  to support this frontend.
 
-config DVB_DIB9000
-	tristate "DiBcom 9000"
-	depends on DVB_CORE && I2C
-	default m if DVB_FE_CUSTOMISE
-	help
-	  A DVB-T tuner module. Designed for mobile usage. Say Y when you want
-	  to support this frontend.
-
 config DVB_TDA10048
 	tristate "Philips TDA10048HN based"
 	depends on DVB_CORE && I2C
@@ -370,20 +319,6 @@ config DVB_AF9013
 	default m if DVB_FE_CUSTOMISE
 	help
 	  Say Y when you want to support this frontend.
-
-config DVB_EC100
-	tristate "E3C EC100"
-	depends on DVB_CORE && I2C
-	default m if DVB_FE_CUSTOMISE
-	help
-	  Say Y when you want to support this frontend.
-
-config DVB_STV0367
-	tristate "ST STV0367 based"
-	depends on DVB_CORE && I2C
-	default m if DVB_FE_CUSTOMISE
-	help
-	  A DVB-T/C tuner module. Say Y when you want to support this frontend.
 
 comment "DVB-C (cable) frontends"
 	depends on DVB_CORE
@@ -476,8 +411,16 @@ config DVB_LGDT330X
 	  An ATSC 8VSB and QAM64/256 tuner module. Say Y when you want
 	  to support this frontend.
 
+config DVB_LGDT3304
+	tristate "LG Electronics LGDT3304"
+	depends on DVB_CORE && I2C
+	default m if DVB_FE_CUSTOMISE
+	help
+	  An ATSC 8VSB and QAM64/256 tuner module. Say Y when you want
+	  to support this frontend.
+
 config DVB_LGDT3305
-	tristate "LG Electronics LGDT3304 and LGDT3305 based"
+	tristate "LG Electronics LGDT3305 based"
 	depends on DVB_CORE && I2C
 	default m if DVB_FE_CUSTOMISE
 	help
@@ -512,27 +455,11 @@ comment "ISDB-T (terrestrial) frontends"
 	depends on DVB_CORE
 
 config DVB_S921
-	tristate "Sharp S921 frontend"
+	tristate "Sharp S921 tuner"
 	depends on DVB_CORE && I2C
 	default m if DVB_FE_CUSTOMISE
 	help
 	  AN ISDB-T DQPSK, QPSK, 16QAM and 64QAM 1seg tuner module.
-	  Say Y when you want to support this frontend.
-
-config DVB_DIB8000
-	tristate "DiBcom 8000MB/MC"
-	depends on DVB_CORE && I2C
-	default m if DVB_FE_CUSTOMISE
-	help
-	  A driver for DiBcom's DiB8000 ISDB-T/ISDB-Tsb demodulator.
-	  Say Y when you want to support this frontend.
-
-config DVB_MB86A20S
-	tristate "Fujitsu mb86a20s"
-	depends on DVB_CORE && I2C
-	default m if DVB_FE_CUSTOMISE
-	help
-	  A driver for Fujitsu mb86a20s ISDB-T/ISDB-Tsb demodulator.
 	  Say Y when you want to support this frontend.
 
 comment "Digital terrestrial only tuners/PLL"
@@ -552,15 +479,6 @@ config DVB_TUNER_DIB0070
 	default m if DVB_FE_CUSTOMISE
 	help
 	  A driver for the silicon baseband tuner DiB0070 from DiBcom.
-	  This device is only used inside a SiP called together with a
-	  demodulator for now.
-
-config DVB_TUNER_DIB0090
-	tristate "DiBcom DiB0090 silicon base-band tuner"
-	depends on I2C
-	default m if DVB_FE_CUSTOMISE
-	help
-	  A driver for the silicon baseband tuner DiB0090 from DiBcom.
 	  This device is only used inside a SiP called together with a
 	  demodulator for now.
 
@@ -588,13 +506,6 @@ config DVB_ISL6421
 	help
 	  An SEC control chip.
 
-config DVB_ISL6423
-	tristate "ISL6423 SEC controller"
-	depends on DVB_CORE && I2C
-	default m if DVB_FE_CUSTOMISE
-	help
-	  A SEC controller chip from Intersil
-
 config DVB_LGS8GL5
 	tristate "Silicon Legend LGS-8GL5 demodulator (OFDM)"
 	depends on DVB_CORE && I2C
@@ -605,35 +516,9 @@ config DVB_LGS8GL5
 config DVB_LGS8GXX
 	tristate "Legend Silicon LGS8913/LGS8GL5/LGS8GXX DMB-TH demodulator"
 	depends on DVB_CORE && I2C
-	select FW_LOADER
 	default m if DVB_FE_CUSTOMISE
 	help
 	  A DMB-TH tuner module. Say Y when you want to support this frontend.
-
-config DVB_ATBM8830
-	tristate "AltoBeam ATBM8830/8831 DMB-TH demodulator"
-	depends on DVB_CORE && I2C
-	default m if DVB_FE_CUSTOMISE
-	help
-	  A DMB-TH tuner module. Say Y when you want to support this frontend.
-
-config DVB_TDA665x
-	tristate "TDA665x tuner"
-	depends on DVB_CORE && I2C
-	default m if DVB_FE_CUSTOMISE
-	help
-	  Support for tuner modules based on Philips TDA6650/TDA6651 chips.
-	  Say Y when you want to support this chip.
-
-	  Currently supported tuners:
-	  * Panasonic ENV57H12D5 (ET-50DT)
-
-config DVB_IX2505V
-	tristate "Sharp IX2505V silicon tuner"
-	depends on DVB_CORE && I2C
-	default m if DVB_FE_CUSTOMISE
-	help
-	  A DVB-S tuner module. Say Y when you want to support this frontend.
 
 comment "Tools to develop new frontends"
 
@@ -641,3 +526,5 @@ config DVB_DUMMY_FE
 	tristate "Dummy frontend driver"
 	default n
 endmenu
+
+endif

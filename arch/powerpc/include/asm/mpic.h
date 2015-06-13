@@ -289,7 +289,7 @@ struct mpic
 #ifdef CONFIG_MPIC_U3_HT_IRQS
 	/* The fixup table */
 	struct mpic_irq_fixup	*fixups;
-	raw_spinlock_t	fixup_lock;
+	spinlock_t		fixup_lock;
 #endif
 
 	/* Register access method */
@@ -367,10 +367,6 @@ struct mpic
 #define MPIC_SINGLE_DEST_CPU		0x00001000
 /* Enable CoreInt delivery of interrupts */
 #define MPIC_ENABLE_COREINT		0x00002000
-/* Disable resetting of the MPIC.
- * NOTE: This flag trumps MPIC_WANTS_RESET.
- */
-#define MPIC_NO_RESET			0x00004000
 
 /* MPIC HW modification ID */
 #define MPIC_REGSET_MASK		0xf0000000
@@ -467,15 +463,18 @@ extern void mpic_cpu_set_priority(int prio);
 /* Request IPIs on primary mpic */
 extern void mpic_request_ipis(void);
 
+/* Send an IPI (non offseted number 0..3) */
+extern void mpic_send_ipi(unsigned int ipi_no, unsigned int cpu_mask);
+
 /* Send a message (IPI) to a given target (cpu number or MSG_*) */
 void smp_mpic_message_pass(int target, int msg);
 
 /* Unmask a specific virq */
-extern void mpic_unmask_irq(struct irq_data *d);
+extern void mpic_unmask_irq(unsigned int irq);
 /* Mask a specific virq */
-extern void mpic_mask_irq(struct irq_data *d);
+extern void mpic_mask_irq(unsigned int irq);
 /* EOI a specific virq */
-extern void mpic_end_irq(struct irq_data *d);
+extern void mpic_end_irq(unsigned int irq);
 
 /* Fetch interrupt from a given mpic */
 extern unsigned int mpic_get_one_irq(struct mpic *mpic);

@@ -28,10 +28,11 @@
 #include <linux/platform_device.h>
 #include <linux/init.h>
 #include <linux/of_platform.h>
-#include <linux/slab.h>
 #include <asm/dcr.h>
 #include <asm/dcr-regs.h>
 #include <asm/cacheflush.h>
+#include <crypto/internal/hash.h>
+#include <crypto/algapi.h>
 #include <crypto/aes.h>
 #include <crypto/sha.h>
 #include "crypto4xx_reg_def.h"
@@ -997,15 +998,10 @@ static int crypto4xx_alg_init(struct crypto_tfm *tfm)
 	ctx->sa_out_dma_addr = 0;
 	ctx->sa_len = 0;
 
-	switch (alg->cra_flags & CRYPTO_ALG_TYPE_MASK) {
-	default:
+	if (alg->cra_type == &crypto_ablkcipher_type)
 		tfm->crt_ablkcipher.reqsize = sizeof(struct crypto4xx_ctx);
-		break;
-	case CRYPTO_ALG_TYPE_AHASH:
-		crypto_ahash_set_reqsize(__crypto_ahash_cast(tfm),
-					 sizeof(struct crypto4xx_ctx));
-		break;
-	}
+	else if (alg->cra_type == &crypto_ahash_type)
+		tfm->crt_ahash.reqsize = sizeof(struct crypto4xx_ctx);
 
 	return 0;
 }
@@ -1019,8 +1015,7 @@ static void crypto4xx_alg_exit(struct crypto_tfm *tfm)
 }
 
 int crypto4xx_register_alg(struct crypto4xx_device *sec_dev,
-			   struct crypto4xx_alg_common *crypto_alg,
-			   int array_size)
+			   struct crypto_alg *crypto_alg, int array_size)
 {
 	struct crypto4xx_alg *alg;
 	int i;
@@ -1032,18 +1027,13 @@ int crypto4xx_register_alg(struct crypto4xx_device *sec_dev,
 			return -ENOMEM;
 
 		alg->alg = crypto_alg[i];
+		INIT_LIST_HEAD(&alg->alg.cra_list);
+		if (alg->alg.cra_init == NULL)
+			alg->alg.cra_init = crypto4xx_alg_init;
+		if (alg->alg.cra_exit == NULL)
+			alg->alg.cra_exit = crypto4xx_alg_exit;
 		alg->dev = sec_dev;
-
-		switch (alg->alg.type) {
-		case CRYPTO_ALG_TYPE_AHASH:
-			rc = crypto_register_ahash(&alg->alg.u.hash);
-			break;
-
-		default:
-			rc = crypto_register_alg(&alg->alg.u.cipher);
-			break;
-		}
-
+		rc = crypto_register_alg(&alg->alg);
 		if (rc) {
 			list_del(&alg->entry);
 			kfree(alg);
@@ -1061,14 +1051,7 @@ static void crypto4xx_unregister_alg(struct crypto4xx_device *sec_dev)
 
 	list_for_each_entry_safe(alg, tmp, &sec_dev->alg_list, entry) {
 		list_del(&alg->entry);
-		switch (alg->alg.type) {
-		case CRYPTO_ALG_TYPE_AHASH:
-			crypto_unregister_ahash(&alg->alg.u.hash);
-			break;
-
-		default:
-			crypto_unregister_alg(&alg->alg.u.cipher);
-		}
+		crypto_unregister_alg(&alg->alg);
 		kfree(alg);
 	}
 }
@@ -1121,18 +1104,17 @@ static irqreturn_t crypto4xx_ce_interrupt_handler(int irq, void *data)
 /**
  * Supported Crypto Algorithms
  */
-struct crypto4xx_alg_common crypto4xx_alg[] = {
+struct crypto_alg crypto4xx_alg[] = {
 	/* Crypto AES modes */
-	{ .type = CRYPTO_ALG_TYPE_ABLKCIPHER, .u.cipher = {
+	{
 		.cra_name 	= "cbc(aes)",
 		.cra_driver_name = "cbc-aes-ppc4xx",
 		.cra_priority 	= CRYPTO4XX_CRYPTO_PRIORITY,
 		.cra_flags 	= CRYPTO_ALG_TYPE_ABLKCIPHER | CRYPTO_ALG_ASYNC,
 		.cra_blocksize 	= AES_BLOCK_SIZE,
 		.cra_ctxsize 	= sizeof(struct crypto4xx_ctx),
+		.cra_alignmask 	= 0,
 		.cra_type 	= &crypto_ablkcipher_type,
-		.cra_init	= crypto4xx_alg_init,
-		.cra_exit	= crypto4xx_alg_exit,
 		.cra_module 	= THIS_MODULE,
 		.cra_u 		= {
 			.ablkcipher = {
@@ -1144,20 +1126,43 @@ struct crypto4xx_alg_common crypto4xx_alg[] = {
 				.decrypt 	= crypto4xx_decrypt,
 			}
 		}
-	}},
+	},
+	/* Hash SHA1 */
+	{
+		.cra_name	= "sha1",
+		.cra_driver_name = "sha1-ppc4xx",
+		.cra_priority	= CRYPTO4XX_CRYPTO_PRIORITY,
+		.cra_flags	= CRYPTO_ALG_TYPE_AHASH | CRYPTO_ALG_ASYNC,
+		.cra_blocksize	= SHA1_BLOCK_SIZE,
+		.cra_ctxsize	= sizeof(struct crypto4xx_ctx),
+		.cra_alignmask	= 0,
+		.cra_type	= &crypto_ahash_type,
+		.cra_init	= crypto4xx_sha1_alg_init,
+		.cra_module	= THIS_MODULE,
+		.cra_u		= {
+			.ahash = {
+				.digestsize 	= SHA1_DIGEST_SIZE,
+				.init		= crypto4xx_hash_init,
+				.update		= crypto4xx_hash_update,
+				.final  	= crypto4xx_hash_final,
+				.digest 	= crypto4xx_hash_digest,
+			}
+		}
+	},
 };
 
 /**
  * Module Initialization Routine
  */
-static int __init crypto4xx_probe(struct platform_device *ofdev)
+static int __init crypto4xx_probe(struct of_device *ofdev,
+				  const struct of_device_id *match)
 {
 	int rc;
 	struct resource res;
 	struct device *dev = &ofdev->dev;
 	struct crypto4xx_core_device *core_dev;
 
-	rc = of_address_to_resource(ofdev->dev.of_node, 0, &res);
+	rc = of_address_to_resource(ofdev->node, 0, &res);
 	if (rc)
 		return -ENODEV;
 
@@ -1214,13 +1219,13 @@ static int __init crypto4xx_probe(struct platform_device *ofdev)
 		     (unsigned long) dev);
 
 	/* Register for Crypto isr, Crypto Engine IRQ */
-	core_dev->irq = irq_of_parse_and_map(ofdev->dev.of_node, 0);
+	core_dev->irq = irq_of_parse_and_map(ofdev->node, 0);
 	rc = request_irq(core_dev->irq, crypto4xx_ce_interrupt_handler, 0,
 			 core_dev->dev->name, dev);
 	if (rc)
 		goto err_request_irq;
 
-	core_dev->dev->ce_base = of_iomap(ofdev->dev.of_node, 0);
+	core_dev->dev->ce_base = of_iomap(ofdev->node, 0);
 	if (!core_dev->dev->ce_base) {
 		dev_err(dev, "failed to of_iomap\n");
 		goto err_iomap;
@@ -1257,7 +1262,7 @@ err_alloc_dev:
 	return rc;
 }
 
-static int __exit crypto4xx_remove(struct platform_device *ofdev)
+static int __exit crypto4xx_remove(struct of_device *ofdev)
 {
 	struct device *dev = &ofdev->dev;
 	struct crypto4xx_core_device *core_dev = dev_get_drvdata(dev);
@@ -1274,29 +1279,26 @@ static int __exit crypto4xx_remove(struct platform_device *ofdev)
 	return 0;
 }
 
-static const struct of_device_id crypto4xx_match[] = {
+static struct of_device_id crypto4xx_match[] = {
 	{ .compatible      = "amcc,ppc4xx-crypto",},
 	{ },
 };
 
-static struct platform_driver crypto4xx_driver = {
-	.driver = {
-		.name = "crypto4xx",
-		.owner = THIS_MODULE,
-		.of_match_table = crypto4xx_match,
-	},
+static struct of_platform_driver crypto4xx_driver = {
+	.name		= "crypto4xx",
+	.match_table	= crypto4xx_match,
 	.probe		= crypto4xx_probe,
 	.remove		= crypto4xx_remove,
 };
 
 static int __init crypto4xx_init(void)
 {
-	return platform_driver_register(&crypto4xx_driver);
+	return of_register_platform_driver(&crypto4xx_driver);
 }
 
 static void __exit crypto4xx_exit(void)
 {
-	platform_driver_unregister(&crypto4xx_driver);
+	of_unregister_platform_driver(&crypto4xx_driver);
 }
 
 module_init(crypto4xx_init);

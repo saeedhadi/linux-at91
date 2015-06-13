@@ -84,6 +84,7 @@ int my_data_handler(void)
 	task = kthread_run(more_data_handling, data, "more_data_handling");
 	if (task == ERR_PTR(-ENOMEM)) {
 		rv = -ENOMEM;
+	        kref_put(&data->refcount, data_release);
 		goto out;
 	}
 
@@ -156,7 +157,7 @@ static struct my_data *get_entry()
 	struct my_data *entry = NULL;
 	mutex_lock(&mutex);
 	if (!list_empty(&q)) {
-		entry = container_of(q.next, struct my_data, link);
+		entry = container_of(q.next, struct my_q_entry, link);
 		kref_get(&entry->refcount);
 	}
 	mutex_unlock(&mutex);

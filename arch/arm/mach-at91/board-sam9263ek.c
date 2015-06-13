@@ -23,7 +23,6 @@
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/module.h>
-#include <linux/mtd/nand.h>
 #include <linux/platform_device.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/ads7846.h>
@@ -33,7 +32,7 @@
 #include <linux/input.h>
 #include <linux/leds.h>
 
-#include <video/atmel_lcdfb.h>
+#include <video/atmel_lcdc.h>
 
 #include <asm/setup.h>
 #include <asm/mach-types.h>
@@ -46,7 +45,6 @@
 #include <mach/hardware.h>
 #include <mach/board.h>
 #include <mach/gpio.h>
-#include <mach/atmel_lcdc.h>
 #include <mach/at91sam9_smc.h>
 #include <mach/at91_shdwc.h>
 
@@ -59,7 +57,7 @@ static void __init ek_map_io(void)
 	/* Initialize processor: 16.367 MHz crystal */
 	at91sam9263_initialize(16367660);
 
-	/* DBGU on ttyS0. (Rx & Tx only) */
+	/* DGBU on ttyS0. (Rx & Tx only) */
 	at91_register_uart(0, 0, 0);
 
 	/* USART0 on ttyS1. (Rx, Tx, RTS, CTS) */
@@ -142,7 +140,7 @@ static struct spi_board_info ek_spi_devices[] = {
 	{
 		.modalias	= "ads7846",
 		.chip_select	= 3,
-		.max_speed_hz	= 125000 * 26,	/* (max sample rate @ 3V) * (cmd + data + overhead) */
+		.max_speed_hz	= 125000 * 16,	/* max sample rate * clocks per sample */
 		.bus_num	= 0,
 		.platform_data	= &ads_info,
 		.irq		= AT91SAM9263_ID_IRQ1,
@@ -157,7 +155,7 @@ static struct spi_board_info ek_spi_devices[] = {
 static struct at91_mmc_data __initdata ek_mmc_data = {
 	.wire4		= 1,
 	.det_pin	= AT91_PIN_PE18,
-	.wp_pin		= AT91_PIN_PE19,
+//	.wp_pin		= ... not connected
 //	.vcc_pin	= ... not connected
 };
 
@@ -199,7 +197,6 @@ static struct atmel_nand_data __initdata ek_nand_data = {
 //	.det_pin	= ... not connected
 	.rdy_pin	= AT91_PIN_PA22,
 	.enable_pin	= AT91_PIN_PD15,
-	.ecc_mode	= NAND_ECC_SOFT,
 	.partition_info	= nand_partitions,
 #if defined(CONFIG_MTD_NAND_ATMEL_BUSWIDTH_16)
 	.bus_width_16	= 1,
@@ -258,6 +255,7 @@ static struct i2c_board_info __initdata ek_i2c_devices[] = {
 	},
 	/* more devices can be added using expansion connectors */
 };
+
 
 /*
  * LCD Controller
@@ -403,23 +401,6 @@ static struct gpio_led ek_pwm_led[] = {
 	}
 };
 
-/*
- * CAN
- */
-static void sam9263ek_transceiver_switch(int on)
-{
-	if (on) {
-		at91_set_gpio_output(AT91_PIN_PA18, 1); /* CANRXEN */
-		at91_set_gpio_output(AT91_PIN_PA19, 0); /* CANRS */
-	} else {
-		at91_set_gpio_output(AT91_PIN_PA18, 0); /* CANRXEN */
-		at91_set_gpio_output(AT91_PIN_PA19, 1); /* CANRS */
-	}
-}
-
-static struct at91_can_data ek_can_data = {
-	.transceiver_switch = sam9263ek_transceiver_switch,
-};
 
 static void __init ek_board_init(void)
 {
@@ -451,12 +432,15 @@ static void __init ek_board_init(void)
 	/* LEDs */
 	at91_gpio_leds(ek_leds, ARRAY_SIZE(ek_leds));
 	at91_pwm_leds(ek_pwm_led, ARRAY_SIZE(ek_pwm_led));
-	/* CAN */
-	at91_add_device_can(&ek_can_data);
+	/* shutdown controller, wakeup button (5 msec low) */
+	at91_sys_write(AT91_SHDW_MR, AT91_SHDW_CPTWK0_(10) | AT91_SHDW_WKMODE0_LOW
+				| AT91_SHDW_RTTWKEN);
 }
 
 MACHINE_START(AT91SAM9263EK, "Atmel AT91SAM9263-EK")
 	/* Maintainer: Atmel */
+	.phys_io	= AT91_BASE_SYS,
+	.io_pg_offst	= (AT91_VA_BASE_SYS >> 18) & 0xfffc,
 	.boot_params	= AT91_SDRAM_BASE + 0x100,
 	.timer		= &at91sam926x_timer,
 	.map_io		= ek_map_io,

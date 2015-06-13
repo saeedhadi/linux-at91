@@ -20,11 +20,11 @@
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/fcntl.h>
-#include <linux/gfp.h>
 #include <linux/interrupt.h>
 #include <linux/init.h>
 #include <linux/ioport.h>
 #include <linux/in.h>
+#include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/delay.h>
 #include <linux/errno.h>
@@ -33,7 +33,6 @@
 #include <linux/skbuff.h>
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
-#include <linux/slab.h>
 
 #include <asm/io.h>
 #include <asm/pgtable.h>
@@ -93,20 +92,12 @@ static unsigned short known_revisions[] =
 
 static int xtsonic_open(struct net_device *dev)
 {
-	int retval;
-
-	retval = request_irq(dev->irq, sonic_interrupt, IRQF_DISABLED,
-				"sonic", dev);
-	if (retval) {
+	if (request_irq(dev->irq,&sonic_interrupt,IRQF_DISABLED,"sonic",dev)) {
 		printk(KERN_ERR "%s: unable to get IRQ %d.\n",
 		       dev->name, dev->irq);
 		return -EAGAIN;
 	}
-
-	retval = sonic_open(dev);
-	if (retval)
-		free_irq(dev->irq, dev);
-	return retval;
+	return sonic_open(dev);
 }
 
 static int xtsonic_close(struct net_device *dev)
@@ -248,7 +239,7 @@ out:
  * Actually probing is superfluous but we're paranoid.
  */
 
-int __devinit xtsonic_probe(struct platform_device *pdev)
+int __init xtsonic_probe(struct platform_device *pdev)
 {
 	struct net_device *dev;
 	struct sonic_local *lp;

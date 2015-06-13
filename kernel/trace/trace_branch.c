@@ -30,11 +30,9 @@ static struct trace_array *branch_tracer;
 static void
 probe_likely_condition(struct ftrace_branch_data *f, int val, int expect)
 {
-	struct ftrace_event_call *call = &event_branch;
 	struct trace_array *tr = branch_tracer;
 	struct ring_buffer_event *event;
 	struct trace_branch *entry;
-	struct ring_buffer *buffer;
 	unsigned long flags;
 	int cpu, pc;
 	const char *p;
@@ -55,8 +53,7 @@ probe_likely_condition(struct ftrace_branch_data *f, int val, int expect)
 		goto out;
 
 	pc = preempt_count();
-	buffer = tr->buffer;
-	event = trace_buffer_lock_reserve(buffer, TRACE_BRANCH,
+	event = trace_buffer_lock_reserve(tr, TRACE_BRANCH,
 					  sizeof(*entry), flags, pc);
 	if (!event)
 		goto out;
@@ -76,8 +73,7 @@ probe_likely_condition(struct ftrace_branch_data *f, int val, int expect)
 	entry->line = f->line;
 	entry->correct = val == expect;
 
-	if (!filter_check_discard(call, entry, buffer, event))
-		ring_buffer_unlock_commit(buffer, event);
+	ring_buffer_unlock_commit(tr->buffer, event);
 
  out:
 	atomic_dec(&tr->data[cpu]->disabled);
@@ -143,7 +139,7 @@ static void branch_trace_reset(struct trace_array *tr)
 }
 
 static enum print_line_t trace_branch_print(struct trace_iterator *iter,
-					    int flags, struct trace_event *event)
+					    int flags)
 {
 	struct trace_branch *field;
 
@@ -167,13 +163,9 @@ static void branch_print_header(struct seq_file *s)
 		"    |\n");
 }
 
-static struct trace_event_functions trace_branch_funcs = {
-	.trace		= trace_branch_print,
-};
-
 static struct trace_event trace_branch_event = {
 	.type		= TRACE_BRANCH,
-	.funcs		= &trace_branch_funcs,
+	.trace		= trace_branch_print,
 };
 
 static struct tracer branch_trace __read_mostly =
@@ -279,7 +271,7 @@ static int branch_stat_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static void *annotated_branch_stat_start(struct tracer_stat *trace)
+static void *annotated_branch_stat_start(void)
 {
 	return __start_annotated_branch_profile;
 }
@@ -311,23 +303,8 @@ static int annotated_branch_stat_cmp(void *p1, void *p2)
 		return -1;
 	if (percent_a > percent_b)
 		return 1;
-
-	if (a->incorrect < b->incorrect)
-		return -1;
-	if (a->incorrect > b->incorrect)
-		return 1;
-
-	/*
-	 * Since the above shows worse (incorrect) cases
-	 * first, we continue that by showing best (correct)
-	 * cases last.
-	 */
-	if (a->correct > b->correct)
-		return -1;
-	if (a->correct < b->correct)
-		return 1;
-
-	return 0;
+	else
+		return 0;
 }
 
 static struct tracer_stat annotated_branch_stats = {
@@ -369,7 +346,7 @@ static int all_branch_stat_headers(struct seq_file *m)
 	return 0;
 }
 
-static void *all_branch_stat_start(struct tracer_stat *trace)
+static void *all_branch_stat_start(void)
 {
 	return __start_branch_profile;
 }

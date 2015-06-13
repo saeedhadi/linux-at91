@@ -17,11 +17,10 @@
 #include <linux/i2c-gpio.h>
 
 #include <linux/fb.h>
-#include <video/atmel_lcdfb.h>
+#include <video/atmel_lcdc.h>
 
 #include <mach/board.h>
 #include <mach/gpio.h>
-#include <mach/atmel_lcdc.h>
 #include <mach/at91sam9263.h>
 #include <mach/at91sam9263_matrix.h>
 #include <mach/at91sam9_smc.h>
@@ -758,42 +757,6 @@ void __init at91_add_device_ac97(struct ac97c_platform_data *data)
 void __init at91_add_device_ac97(struct ac97c_platform_data *data) {}
 #endif
 
-/* --------------------------------------------------------------------
- *  CAN Controller
- * -------------------------------------------------------------------- */
-
-#if defined(CONFIG_CAN_AT91) || defined(CONFIG_CAN_AT91_MODULE)
-static struct resource can_resources[] = {
-	[0] = {
-		.start	= AT91SAM9263_BASE_CAN,
-		.end	= AT91SAM9263_BASE_CAN + SZ_16K - 1,
-		.flags	= IORESOURCE_MEM,
-	},
-	[1] = {
-		.start	= AT91SAM9263_ID_CAN,
-		.end	= AT91SAM9263_ID_CAN,
-		.flags	= IORESOURCE_IRQ,
-	},
-};
-
-static struct platform_device at91sam9263_can_device = {
-	.name		= "at91_can",
-	.id		= -1,
-	.resource	= can_resources,
-	.num_resources	= ARRAY_SIZE(can_resources),
-};
-
-void __init at91_add_device_can(struct at91_can_data *data)
-{
-	at91_set_A_periph(AT91_PIN_PA13, 0);	/* CANTX */
-	at91_set_A_periph(AT91_PIN_PA14, 0);	/* CANRX */
-	at91sam9263_can_device.dev.platform_data = data;
-
-	platform_device_register(&at91sam9263_can_device);
-}
-#else
-void __init at91_add_device_can(struct at91_can_data *data) {}
-#endif
 
 /* --------------------------------------------------------------------
  *  LCD Controller

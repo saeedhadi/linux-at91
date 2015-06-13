@@ -128,7 +128,6 @@
  * 	void add_input_randomness(unsigned int type, unsigned int code,
  *                                unsigned int value);
  * 	void add_interrupt_randomness(int irq);
- * 	void add_disk_randomness(struct gendisk *disk);
  *
  * add_input_randomness() uses the input layer interrupt timing, as well as
  * the event type information from the hardware.
@@ -137,15 +136,9 @@
  * inputs to the entropy pool.  Note that not all interrupts are good
  * sources of randomness!  For example, the timer interrupts is not a
  * good choice, because the periodicity of the interrupts is too
- * regular, and hence predictable to an attacker.  Network Interface
- * Controller interrupts are a better measure, since the timing of the
- * NIC interrupts are more unpredictable.
- *
- * add_disk_randomness() uses what amounts to the seek time of block
- * layer request events, on a per-disk_devt basis, as input to the
- * entropy pool. Note that high-speed solid state drives with very low
- * seek times do not make for good sources of entropy, as their seek
- * times are usually fairly consistent.
+ * regular, and hence predictable to an attacker.  Disk interrupts are
+ * a better measure, since the timing of the disk interrupts are more
+ * unpredictable.
  *
  * All of these routines try to estimate how many bits of randomness a
  * particular randomness source.  They do this by keeping track of the
@@ -247,7 +240,6 @@
 #include <linux/spinlock.h>
 #include <linux/percpu.h>
 #include <linux/cryptohash.h>
-#include <linux/fips.h>
 
 #ifdef CONFIG_GENERIC_HARDIRQS
 # include <linux/irq.h>
@@ -264,7 +256,6 @@
 #define INPUT_POOL_WORDS 128
 #define OUTPUT_POOL_WORDS 32
 #define SEC_XFER_SIZE 512
-#define EXTRACT_SIZE 10
 
 /*
  * The minimum number of bits of entropy before we wake up a read on
@@ -414,15 +405,14 @@ struct entropy_store {
 	struct poolinfo *poolinfo;
 	__u32 *pool;
 	const char *name;
-	struct entropy_store *pull;
 	int limit;
+	struct entropy_store *pull;
 
 	/* read-write data: */
 	spinlock_t lock;
 	unsigned add_ptr;
 	int entropy_count;
 	int input_rotate;
-	__u8 last_data[EXTRACT_SIZE];
 };
 
 static __u32 input_pool_data[INPUT_POOL_WORDS];
@@ -633,7 +623,7 @@ static void add_timer_randomness(struct timer_rand_state *state, unsigned num)
 	preempt_disable();
 	/* if over the trickle threshold, use only 1 in 4096 samples */
 	if (input_pool.entropy_count > trickle_thresh &&
-	    ((__this_cpu_inc_return(trickle_count) - 1) & 0xfff))
+	    (__get_cpu_var(trickle_count)++ & 0xfff))
 		goto out;
 
 	sample.jiffies = jiffies;
@@ -722,6 +712,8 @@ void add_disk_randomness(struct gendisk *disk)
 }
 #endif
 
+#define EXTRACT_SIZE 10
+
 /*********************************************************************
  *
  * Entropy extraction routines
@@ -732,7 +724,7 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
 			       size_t nbytes, int min, int rsvd);
 
 /*
- * This utility inline function is responsible for transferring entropy
+ * This utility inline function is responsible for transfering entropy
  * from the primary pool to the secondary extraction pool. We make
  * sure we pull enough for a 'catastrophic reseed'.
  */
@@ -860,21 +852,12 @@ static ssize_t extract_entropy(struct entropy_store *r, void *buf,
 {
 	ssize_t ret = 0, i;
 	__u8 tmp[EXTRACT_SIZE];
-	unsigned long flags;
 
 	xfer_secondary_pool(r, nbytes);
 	nbytes = account(r, nbytes, min, reserved);
 
 	while (nbytes) {
 		extract_buf(r, tmp);
-
-		if (fips_enabled) {
-			spin_lock_irqsave(&r->lock, flags);
-			if (!memcmp(tmp, r->last_data, EXTRACT_SIZE))
-				panic("Hardware RNG duplicated output!\n");
-			memcpy(r->last_data, tmp, EXTRACT_SIZE);
-			spin_unlock_irqrestore(&r->lock, flags);
-		}
 		i = min_t(int, nbytes, EXTRACT_SIZE);
 		memcpy(buf, tmp, i);
 		nbytes -= i;
@@ -1054,6 +1037,12 @@ random_read(struct file *file, char __user *buf, size_t nbytes, loff_t *ppos)
 				/* like a named pipe */
 	}
 
+	/*
+	 * If we gave the user some bytes, update the access time.
+	 */
+	if (count)
+		file_accessed(file);
+
 	return (count ? count : retval);
 }
 
@@ -1104,6 +1093,7 @@ static ssize_t random_write(struct file *file, const char __user *buffer,
 			    size_t count, loff_t *ppos)
 {
 	size_t ret;
+	struct inode *inode = file->f_path.dentry->d_inode;
 
 	ret = write_pool(&blocking_pool, buffer, count);
 	if (ret)
@@ -1112,6 +1102,8 @@ static ssize_t random_write(struct file *file, const char __user *buffer,
 	if (ret)
 		return ret;
 
+	inode->i_mtime = current_fs_time(inode->i_sb);
+	mark_inode_dirty(inode);
 	return (ssize_t)count;
 }
 
@@ -1172,7 +1164,6 @@ const struct file_operations random_fops = {
 	.poll  = random_poll,
 	.unlocked_ioctl = random_ioctl,
 	.fasync = random_fasync,
-	.llseek = noop_llseek,
 };
 
 const struct file_operations urandom_fops = {
@@ -1180,7 +1171,6 @@ const struct file_operations urandom_fops = {
 	.write = random_write,
 	.unlocked_ioctl = random_ioctl,
 	.fasync = random_fasync,
-	.llseek = noop_llseek,
 };
 
 /***************************************************************
@@ -1196,7 +1186,7 @@ const struct file_operations urandom_fops = {
 void generate_random_uuid(unsigned char uuid_out[16])
 {
 	get_random_bytes(uuid_out, 16);
-	/* Set UUID version to 4 --- truly random generation */
+	/* Set UUID version to 4 --- truely random generation */
 	uuid_out[6] = (uuid_out[6] & 0x0F) | 0x40;
 	/* Set the UUID variant to DCE */
 	uuid_out[8] = (uuid_out[8] & 0x3F) | 0x80;
@@ -1227,7 +1217,7 @@ static char sysctl_bootid[16];
  * as an ASCII string in the standard UUID format.  If accesses via the
  * sysctl system call, it is returned as 16 bytes of binary data.
  */
-static int proc_do_uuid(ctl_table *table, int write,
+static int proc_do_uuid(ctl_table *table, int write, struct file *filp,
 			void __user *buffer, size_t *lenp, loff_t *ppos)
 {
 	ctl_table fake_table;
@@ -1241,68 +1231,112 @@ static int proc_do_uuid(ctl_table *table, int write,
 	if (uuid[8] == 0)
 		generate_random_uuid(uuid);
 
-	sprintf(buf, "%pU", uuid);
-
+	sprintf(buf, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-"
+		"%02x%02x%02x%02x%02x%02x",
+		uuid[0],  uuid[1],  uuid[2],  uuid[3],
+		uuid[4],  uuid[5],  uuid[6],  uuid[7],
+		uuid[8],  uuid[9],  uuid[10], uuid[11],
+		uuid[12], uuid[13], uuid[14], uuid[15]);
 	fake_table.data = buf;
 	fake_table.maxlen = sizeof(buf);
 
-	return proc_dostring(&fake_table, write, buffer, lenp, ppos);
+	return proc_dostring(&fake_table, write, filp, buffer, lenp, ppos);
+}
+
+static int uuid_strategy(ctl_table *table,
+			 void __user *oldval, size_t __user *oldlenp,
+			 void __user *newval, size_t newlen)
+{
+	unsigned char tmp_uuid[16], *uuid;
+	unsigned int len;
+
+	if (!oldval || !oldlenp)
+		return 1;
+
+	uuid = table->data;
+	if (!uuid) {
+		uuid = tmp_uuid;
+		uuid[8] = 0;
+	}
+	if (uuid[8] == 0)
+		generate_random_uuid(uuid);
+
+	if (get_user(len, oldlenp))
+		return -EFAULT;
+	if (len) {
+		if (len > 16)
+			len = 16;
+		if (copy_to_user(oldval, uuid, len) ||
+		    put_user(len, oldlenp))
+			return -EFAULT;
+	}
+	return 1;
 }
 
 static int sysctl_poolsize = INPUT_POOL_WORDS * 32;
 ctl_table random_table[] = {
 	{
+		.ctl_name 	= RANDOM_POOLSIZE,
 		.procname	= "poolsize",
 		.data		= &sysctl_poolsize,
 		.maxlen		= sizeof(int),
 		.mode		= 0444,
-		.proc_handler	= proc_dointvec,
+		.proc_handler	= &proc_dointvec,
 	},
 	{
+		.ctl_name	= RANDOM_ENTROPY_COUNT,
 		.procname	= "entropy_avail",
 		.maxlen		= sizeof(int),
 		.mode		= 0444,
-		.proc_handler	= proc_dointvec,
+		.proc_handler	= &proc_dointvec,
 		.data		= &input_pool.entropy_count,
 	},
 	{
+		.ctl_name	= RANDOM_READ_THRESH,
 		.procname	= "read_wakeup_threshold",
 		.data		= &random_read_wakeup_thresh,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
+		.proc_handler	= &proc_dointvec_minmax,
+		.strategy	= &sysctl_intvec,
 		.extra1		= &min_read_thresh,
 		.extra2		= &max_read_thresh,
 	},
 	{
+		.ctl_name	= RANDOM_WRITE_THRESH,
 		.procname	= "write_wakeup_threshold",
 		.data		= &random_write_wakeup_thresh,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
+		.proc_handler	= &proc_dointvec_minmax,
+		.strategy	= &sysctl_intvec,
 		.extra1		= &min_write_thresh,
 		.extra2		= &max_write_thresh,
 	},
 	{
+		.ctl_name	= RANDOM_BOOT_ID,
 		.procname	= "boot_id",
 		.data		= &sysctl_bootid,
 		.maxlen		= 16,
 		.mode		= 0444,
-		.proc_handler	= proc_do_uuid,
+		.proc_handler	= &proc_do_uuid,
+		.strategy	= &uuid_strategy,
 	},
 	{
+		.ctl_name	= RANDOM_UUID,
 		.procname	= "uuid",
 		.maxlen		= 16,
 		.mode		= 0444,
-		.proc_handler	= proc_do_uuid,
+		.proc_handler	= &proc_do_uuid,
+		.strategy	= &uuid_strategy,
 	},
-	{ }
+	{ .ctl_name = 0 }
 };
 #endif 	/* CONFIG_SYSCTL */
 
 /********************************************************************
  *
- * Random functions for networking
+ * Random funtions for networking
  *
  ********************************************************************/
 

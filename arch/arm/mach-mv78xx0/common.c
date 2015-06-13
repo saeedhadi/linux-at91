@@ -818,15 +818,9 @@ void __init mv78xx0_uart3_init(void)
 /*****************************************************************************
  * Time handling
  ****************************************************************************/
-void __init mv78xx0_init_early(void)
-{
-	orion_time_set_base(TIMER_VIRT_BASE);
-}
-
 static void mv78xx0_timer_init(void)
 {
-	orion_time_init(BRIDGE_VIRT_BASE, BRIDGE_INT_TIMER1_CLR,
-			IRQ_MV78XX0_TIMER_1, get_tclk());
+	orion_time_init(IRQ_MV78XX0_TIMER_1, get_tclk());
 }
 
 struct sys_timer mv78xx0_timer = {
@@ -851,8 +845,6 @@ static char * __init mv78xx0_id(void)
 	} else if (dev == MV78100_DEV_ID) {
 		if (rev == MV78100_REV_A0)
 			return "MV78100-A0";
-		else if (rev == MV78100_REV_A1)
-			return "MV78100-A1";
 		else
 			return "MV78100-Rev-Unsupported";
 	} else if (dev == MV78200_DEV_ID) {

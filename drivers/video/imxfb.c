@@ -33,18 +33,11 @@
 #include <linux/math64.h>
 
 #include <mach/imxfb.h>
-#include <mach/hardware.h>
 
 /*
  * Complain if VAR is out of range.
  */
 #define DEBUG_VAR 1
-
-#if defined(CONFIG_BACKLIGHT_CLASS_DEVICE) || \
-	(defined(CONFIG_BACKLIGHT_CLASS_DEVICE_MODULE) && \
-		defined(CONFIG_FB_IMX_MODULE))
-#define PWMR_BACKLIGHT_AVAILABLE
-#endif
 
 #define DRIVER_NAME "imx-fb"
 
@@ -53,8 +46,11 @@
 #define LCDC_SIZE	0x04
 #define SIZE_XMAX(x)	((((x) >> 4) & 0x3f) << 20)
 
-#define YMAX_MASK       (cpu_is_mx1() ? 0x1ff : 0x3ff)
-#define SIZE_YMAX(y)	((y) & YMAX_MASK)
+#ifdef CONFIG_ARCH_MX1
+#define SIZE_YMAX(y)	((y) & 0x1ff)
+#else
+#define SIZE_YMAX(y)	((y) & 0x3ff)
+#endif
 
 #define LCDC_VPW	0x08
 #define VPW_VPW(x)	((x) & 0x3ff)
@@ -133,10 +129,6 @@
 #define LCDISR_EOF	(1<<1)
 #define LCDISR_BOF	(1<<0)
 
-/* Used fb-mode. Can be set on kernel command line, therefore file-static. */
-static const char *fb_mode;
-
-
 /*
  * These are the bitfields for each
  * display depth that we support.
@@ -152,6 +144,10 @@ struct imxfb_info {
 	struct platform_device  *pdev;
 	void __iomem		*regs;
 	struct clk		*clk;
+
+	u_int			max_bpp;
+	u_int			max_xres;
+	u_int			max_yres;
 
 	/*
 	 * These are the addresses we mapped
@@ -175,12 +171,6 @@ struct imxfb_info {
 	u_int			cmap_inverse:1,
 				cmap_static:1,
 				unused:30;
-
-	struct imx_fb_videomode *mode;
-	int			num_modes;
-#ifdef PWMR_BACKLIGHT_AVAILABLE
-	struct backlight_device *bl;
-#endif
 
 	void (*lcd_power)(int);
 	void (*backlight_power)(int);
@@ -308,18 +298,6 @@ static int imxfb_setcolreg(u_int regno, u_int red, u_int green, u_int blue,
 	return ret;
 }
 
-static const struct imx_fb_videomode *imxfb_find_mode(struct imxfb_info *fbi)
-{
-	struct imx_fb_videomode *m;
-	int i;
-
-	for (i = 0, m = &fbi->mode[0]; i < fbi->num_modes; i++, m++) {
-		if (!strcmp(m->mode.name, fb_mode))
-			return m;
-	}
-	return NULL;
-}
-
 /*
  *  imxfb_check_var():
  *    Round up in the following order: bits_per_pixel, xres,
@@ -330,80 +308,34 @@ static int imxfb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 {
 	struct imxfb_info *fbi = info->par;
 	struct imxfb_rgb *rgb;
-	const struct imx_fb_videomode *imxfb_mode;
-	unsigned long lcd_clk;
-	unsigned long long tmp;
-	u32 pcr = 0;
 
 	if (var->xres < MIN_XRES)
 		var->xres = MIN_XRES;
 	if (var->yres < MIN_YRES)
 		var->yres = MIN_YRES;
-
-	imxfb_mode = imxfb_find_mode(fbi);
-	if (!imxfb_mode)
-		return -EINVAL;
-
-	var->xres		= imxfb_mode->mode.xres;
-	var->yres		= imxfb_mode->mode.yres;
-	var->bits_per_pixel	= imxfb_mode->bpp;
-	var->pixclock		= imxfb_mode->mode.pixclock;
-	var->hsync_len		= imxfb_mode->mode.hsync_len;
-	var->left_margin	= imxfb_mode->mode.left_margin;
-	var->right_margin	= imxfb_mode->mode.right_margin;
-	var->vsync_len		= imxfb_mode->mode.vsync_len;
-	var->upper_margin	= imxfb_mode->mode.upper_margin;
-	var->lower_margin	= imxfb_mode->mode.lower_margin;
-	var->sync		= imxfb_mode->mode.sync;
-	var->xres_virtual	= max(var->xres_virtual, var->xres);
-	var->yres_virtual	= max(var->yres_virtual, var->yres);
+	if (var->xres > fbi->max_xres)
+		var->xres = fbi->max_xres;
+	if (var->yres > fbi->max_yres)
+		var->yres = fbi->max_yres;
+	var->xres_virtual = max(var->xres_virtual, var->xres);
+	var->yres_virtual = max(var->yres_virtual, var->yres);
 
 	pr_debug("var->bits_per_pixel=%d\n", var->bits_per_pixel);
-
-	lcd_clk = clk_get_rate(fbi->clk);
-
-	tmp = var->pixclock * (unsigned long long)lcd_clk;
-
-	do_div(tmp, 1000000);
-
-	if (do_div(tmp, 1000000) > 500000)
-		tmp++;
-
-	pcr = (unsigned int)tmp;
-
-	if (--pcr > 0x3F) {
-		pcr = 0x3F;
-		printk(KERN_WARNING "Must limit pixel clock to %luHz\n",
-				lcd_clk / pcr);
-	}
-
 	switch (var->bits_per_pixel) {
 	case 32:
-		pcr |= PCR_BPIX_18;
 		rgb = &def_rgb_18;
 		break;
 	case 16:
 	default:
-		if (cpu_is_mx1())
-			pcr |= PCR_BPIX_12;
-		else
-			pcr |= PCR_BPIX_16;
-
-		if (imxfb_mode->pcr & PCR_TFT)
+		if (fbi->pcr & PCR_TFT)
 			rgb = &def_rgb_16_tft;
 		else
 			rgb = &def_rgb_16_stn;
 		break;
 	case 8:
-		pcr |= PCR_BPIX_8;
 		rgb = &def_rgb_8;
 		break;
 	}
-
-	/* add sync polarities */
-	pcr |= imxfb_mode->pcr & ~(0x3f | (7 << 25));
-
-	fbi->pcr = pcr;
 
 	/*
 	 * Copy the RGB parameters for this display
@@ -455,79 +387,15 @@ static int imxfb_set_par(struct fb_info *info)
 	return 0;
 }
 
-#ifdef PWMR_BACKLIGHT_AVAILABLE
-static int imxfb_bl_get_brightness(struct backlight_device *bl)
-{
-	struct imxfb_info *fbi = bl_get_data(bl);
-
-	return readl(fbi->regs + LCDC_PWMR) & 0xFF;
-}
-
-static int imxfb_bl_update_status(struct backlight_device *bl)
-{
-	struct imxfb_info *fbi = bl_get_data(bl);
-	int brightness = bl->props.brightness;
-
-	if (bl->props.power != FB_BLANK_UNBLANK)
-		brightness = 0;
-	if (bl->props.fb_blank != FB_BLANK_UNBLANK)
-		brightness = 0;
-
-	fbi->pwmr = (fbi->pwmr & ~0xFF) | brightness;
-
-	if (bl->props.fb_blank != FB_BLANK_UNBLANK)
-		clk_enable(fbi->clk);
-	writel(fbi->pwmr, fbi->regs + LCDC_PWMR);
-	if (bl->props.fb_blank != FB_BLANK_UNBLANK)
-		clk_disable(fbi->clk);
-
-	return 0;
-}
-
-static const struct backlight_ops imxfb_lcdc_bl_ops = {
-	.update_status = imxfb_bl_update_status,
-	.get_brightness = imxfb_bl_get_brightness,
-};
-
-static void imxfb_init_backlight(struct imxfb_info *fbi)
-{
-	struct backlight_properties props;
-	struct backlight_device	*bl;
-
-	if (fbi->bl)
-		return;
-
-	memset(&props, 0, sizeof(struct backlight_properties));
-	props.max_brightness = 0xff;
-	props.type = BACKLIGHT_RAW;
-	writel(fbi->pwmr, fbi->regs + LCDC_PWMR);
-
-	bl = backlight_device_register("imxfb-bl", &fbi->pdev->dev, fbi,
-				       &imxfb_lcdc_bl_ops, &props);
-	if (IS_ERR(bl)) {
-		dev_err(&fbi->pdev->dev, "error %ld on backlight register\n",
-				PTR_ERR(bl));
-		return;
-	}
-
-	fbi->bl = bl;
-	bl->props.power = FB_BLANK_UNBLANK;
-	bl->props.fb_blank = FB_BLANK_UNBLANK;
-	bl->props.brightness = imxfb_bl_get_brightness(bl);
-}
-
-static void imxfb_exit_backlight(struct imxfb_info *fbi)
-{
-	if (fbi->bl)
-		backlight_device_unregister(fbi->bl);
-}
-#endif
-
 static void imxfb_enable_controller(struct imxfb_info *fbi)
 {
 	pr_debug("Enabling LCD controller\n");
 
 	writel(fbi->screen_dma, fbi->regs + LCDC_SSA);
+
+	/* physical screen start address	    */
+	writel(VPW_VPW(fbi->max_xres * fbi->max_bpp / 8 / 4),
+		fbi->regs + LCDC_VPW);
 
 	/* panning offset 0 (0 pixel offset)        */
 	writel(0x00000000, fbi->regs + LCDC_POS);
@@ -600,6 +468,8 @@ static struct fb_ops imxfb_ops = {
 static int imxfb_activate_var(struct fb_var_screeninfo *var, struct fb_info *info)
 {
 	struct imxfb_info *fbi = info->par;
+	unsigned int pcr, lcd_clk;
+	unsigned long long tmp;
 
 	pr_debug("var: xres=%d hslen=%d lm=%d rm=%d\n",
 		var->xres, var->hsync_len,
@@ -621,7 +491,7 @@ static int imxfb_activate_var(struct fb_var_screeninfo *var, struct fb_info *inf
 	if (var->right_margin > 255)
 		printk(KERN_ERR "%s: invalid right_margin %d\n",
 			info->fix.id, var->right_margin);
-	if (var->yres < 1 || var->yres > YMAX_MASK)
+	if (var->yres < 1 || var->yres > 511)
 		printk(KERN_ERR "%s: invalid yres %d\n",
 			info->fix.id, var->yres);
 	if (var->vsync_len > 100)
@@ -634,10 +504,6 @@ static int imxfb_activate_var(struct fb_var_screeninfo *var, struct fb_info *inf
 		printk(KERN_ERR "%s: invalid lower_margin %d\n",
 			info->fix.id, var->lower_margin);
 #endif
-
-	/* physical screen start address	    */
-	writel(VPW_VPW(var->xres * var->bits_per_pixel / 8 / 4),
-		fbi->regs + LCDC_VPW);
 
 	writel(HCR_H_WIDTH(var->hsync_len - 1) |
 		HCR_H_WAIT_1(var->right_margin - 1) |
@@ -652,10 +518,23 @@ static int imxfb_activate_var(struct fb_var_screeninfo *var, struct fb_info *inf
 	writel(SIZE_XMAX(var->xres) | SIZE_YMAX(var->yres),
 			fbi->regs + LCDC_SIZE);
 
-	writel(fbi->pcr, fbi->regs + LCDC_PCR);
-#ifndef PWMR_BACKLIGHT_AVAILABLE
+	lcd_clk = clk_get_rate(fbi->clk);
+	tmp = var->pixclock * (unsigned long long)lcd_clk;
+	do_div(tmp, 1000000);
+	if (do_div(tmp, 1000000) > 500000)
+		tmp++;
+	pcr = (unsigned int)tmp;
+	if (--pcr > 0x3F) {
+		pcr = 0x3F;
+		printk(KERN_WARNING "Must limit pixel clock to %uHz\n",
+				lcd_clk / pcr);
+	}
+
+	/* add sync polarities */
+	pcr |= fbi->pcr & ~0x3F;
+
+	writel(pcr, fbi->regs + LCDC_PCR);
 	writel(fbi->pwmr, fbi->regs + LCDC_PWMR);
-#endif
 	writel(fbi->lscr1, fbi->regs + LCDC_LSCR1);
 	writel(fbi->dmacr, fbi->regs + LCDC_DMACR);
 
@@ -669,8 +548,7 @@ static int imxfb_activate_var(struct fb_var_screeninfo *var, struct fb_info *inf
  */
 static int imxfb_suspend(struct platform_device *dev, pm_message_t state)
 {
-	struct fb_info *info = platform_get_drvdata(dev);
-	struct imxfb_info *fbi = info->par;
+	struct imxfb_info *fbi = platform_get_drvdata(dev);
 
 	pr_debug("%s\n", __func__);
 
@@ -680,8 +558,7 @@ static int imxfb_suspend(struct platform_device *dev, pm_message_t state)
 
 static int imxfb_resume(struct platform_device *dev)
 {
-	struct fb_info *info = platform_get_drvdata(dev);
-	struct imxfb_info *fbi = info->par;
+	struct imxfb_info *fbi = platform_get_drvdata(dev);
 
 	pr_debug("%s\n", __func__);
 
@@ -698,8 +575,6 @@ static int __init imxfb_init_fbinfo(struct platform_device *pdev)
 	struct imx_fb_platform_data *pdata = pdev->dev.platform_data;
 	struct fb_info *info = dev_get_drvdata(&pdev->dev);
 	struct imxfb_info *fbi = info->par;
-	struct imx_fb_videomode *m;
-	int i;
 
 	pr_debug("%s\n",__func__);
 
@@ -728,18 +603,35 @@ static int __init imxfb_init_fbinfo(struct platform_device *pdev)
 	info->fbops			= &imxfb_ops;
 	info->flags			= FBINFO_FLAG_DEFAULT |
 					  FBINFO_READS_FAST;
+
+	fbi->max_xres			= pdata->xres;
+	info->var.xres			= pdata->xres;
+	info->var.xres_virtual		= pdata->xres;
+	fbi->max_yres			= pdata->yres;
+	info->var.yres			= pdata->yres;
+	info->var.yres_virtual		= pdata->yres;
+	fbi->max_bpp			= pdata->bpp;
+	info->var.bits_per_pixel	= pdata->bpp;
+	info->var.nonstd		= pdata->nonstd;
+	info->var.pixclock		= pdata->pixclock;
+	info->var.hsync_len		= pdata->hsync_len;
+	info->var.left_margin		= pdata->left_margin;
+	info->var.right_margin		= pdata->right_margin;
+	info->var.vsync_len		= pdata->vsync_len;
+	info->var.upper_margin		= pdata->upper_margin;
+	info->var.lower_margin		= pdata->lower_margin;
+	info->var.sync			= pdata->sync;
 	info->var.grayscale		= pdata->cmap_greyscale;
 	fbi->cmap_inverse		= pdata->cmap_inverse;
 	fbi->cmap_static		= pdata->cmap_static;
+	fbi->pcr			= pdata->pcr;
 	fbi->lscr1			= pdata->lscr1;
 	fbi->dmacr			= pdata->dmacr;
 	fbi->pwmr			= pdata->pwmr;
 	fbi->lcd_power			= pdata->lcd_power;
 	fbi->backlight_power		= pdata->backlight_power;
-
-	for (i = 0, m = &pdata->mode[0]; i < pdata->num_modes; i++, m++)
-		info->fix.smem_len = max_t(size_t, info->fix.smem_len,
-				m->mode.xres * m->mode.yres * m->bpp / 8);
+	info->fix.smem_len		= fbi->max_xres * fbi->max_yres *
+					  fbi->max_bpp / 8;
 
 	return 0;
 }
@@ -750,9 +642,9 @@ static int __init imxfb_probe(struct platform_device *pdev)
 	struct fb_info *info;
 	struct imx_fb_platform_data *pdata;
 	struct resource *res;
-	int ret, i;
+	int ret;
 
-	dev_info(&pdev->dev, "i.MX Framebuffer driver\n");
+	printk("i.MX Framebuffer driver\n");
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res)
@@ -770,9 +662,6 @@ static int __init imxfb_probe(struct platform_device *pdev)
 
 	fbi = info->par;
 
-	if (!fb_mode)
-		fb_mode = pdata->mode[0].mode.name;
-
 	platform_set_drvdata(pdev, info);
 
 	ret = imxfb_init_fbinfo(pdev);
@@ -788,14 +677,14 @@ static int __init imxfb_probe(struct platform_device *pdev)
 
 	fbi->clk = clk_get(&pdev->dev, NULL);
 	if (IS_ERR(fbi->clk)) {
-		ret = PTR_ERR(fbi->clk);
+		ret = PTR_ERR(fbi->clk);;
 		dev_err(&pdev->dev, "unable to get clock: %d\n", ret);
 		goto failed_getclock;
 	}
 
 	fbi->regs = ioremap(res->start, resource_size(res));
 	if (fbi->regs == NULL) {
-		dev_err(&pdev->dev, "Cannot map frame buffer registers\n");
+		printk(KERN_ERR"Cannot map frame buffer registers\n");
 		goto failed_ioremap;
 	}
 
@@ -830,13 +719,6 @@ static int __init imxfb_probe(struct platform_device *pdev)
 			goto failed_platform_init;
 	}
 
-	fbi->mode = pdata->mode;
-	fbi->num_modes = pdata->num_modes;
-
-	INIT_LIST_HEAD(&info->modelist);
-	for (i = 0; i < pdata->num_modes; i++)
-		fb_add_videomode(&pdata->mode[i].mode, &info->modelist);
-
 	/*
 	 * This makes sure that our colour bitfield
 	 * descriptors are correctly initialised.
@@ -855,10 +737,6 @@ static int __init imxfb_probe(struct platform_device *pdev)
 	}
 
 	imxfb_enable_controller(fbi);
-	fbi->pdev = pdev;
-#ifdef PWMR_BACKLIGHT_AVAILABLE
-	imxfb_init_backlight(fbi);
-#endif
 
 	return 0;
 
@@ -876,7 +754,7 @@ failed_map:
 failed_getclock:
 	iounmap(fbi->regs);
 failed_ioremap:
-	release_mem_region(res->start, resource_size(res));
+	release_mem_region(res->start, res->end - res->start);
 failed_req:
 	kfree(info->pseudo_palette);
 failed_init:
@@ -896,9 +774,6 @@ static int __devexit imxfb_remove(struct platform_device *pdev)
 
 	imxfb_disable_controller(fbi);
 
-#ifdef PWMR_BACKLIGHT_AVAILABLE
-	imxfb_exit_backlight(fbi);
-#endif
 	unregister_framebuffer(info);
 
 	pdata = pdev->dev.platform_data;
@@ -910,7 +785,7 @@ static int __devexit imxfb_remove(struct platform_device *pdev)
 	framebuffer_release(info);
 
 	iounmap(fbi->regs);
-	release_mem_region(res->start, resource_size(res));
+	release_mem_region(res->start, res->end - res->start + 1);
 	clk_disable(fbi->clk);
 	clk_put(fbi->clk);
 
@@ -936,34 +811,8 @@ static struct platform_driver imxfb_driver = {
 	},
 };
 
-static int imxfb_setup(void)
-{
-#ifndef MODULE
-	char *opt, *options = NULL;
-
-	if (fb_get_options("imxfb", &options))
-		return -ENODEV;
-
-	if (!options || !*options)
-		return 0;
-
-	while ((opt = strsep(&options, ",")) != NULL) {
-		if (!*opt)
-			continue;
-		else
-			fb_mode = opt;
-	}
-#endif
-	return 0;
-}
-
 int __init imxfb_init(void)
 {
-	int ret = imxfb_setup();
-
-	if (ret < 0)
-		return ret;
-
 	return platform_driver_probe(&imxfb_driver, imxfb_probe);
 }
 
@@ -975,6 +824,6 @@ static void __exit imxfb_cleanup(void)
 module_init(imxfb_init);
 module_exit(imxfb_cleanup);
 
-MODULE_DESCRIPTION("Freescale i.MX framebuffer driver");
+MODULE_DESCRIPTION("Motorola i.MX framebuffer driver");
 MODULE_AUTHOR("Sascha Hauer, Pengutronix");
 MODULE_LICENSE("GPL");

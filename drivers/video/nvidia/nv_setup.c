@@ -50,7 +50,6 @@
 #include <video/vga.h>
 #include <linux/delay.h>
 #include <linux/pci.h>
-#include <linux/slab.h>
 #include "nv_type.h"
 #include "nv_local.h"
 #include "nv_proto.h"
@@ -544,7 +543,8 @@ int NVCommonSetup(struct fb_info *info)
 		} else if (analog_on_B) {
 			CRTCnumber = outputBfromCRTC;
 			FlatPanel = 0;
-			printk("nvidiafb: CRTC %i appears to have a "
+			printk("nvidiafb: CRTC %i"
+			       "appears to have a "
 			       "CRT attached\n", CRTCnumber);
 		} else if (slaved_on_A) {
 			CRTCnumber = 0;

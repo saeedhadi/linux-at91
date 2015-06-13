@@ -10,7 +10,6 @@
 
 #define KMSG_COMPONENT "dasd"
 
-#include <linux/kernel_stat.h>
 #include <linux/stddef.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
@@ -25,6 +24,7 @@
 #include <asm/ebcdic.h>
 #include <asm/io.h>
 #include <asm/s390_ext.h>
+#include <asm/todclk.h>
 #include <asm/vtoc.h>
 #include <asm/diag.h>
 
@@ -44,7 +44,7 @@ MODULE_LICENSE("GPL");
 			   sizeof(struct dasd_diag_req)) / \
 		           sizeof(struct dasd_diag_bio)) / 2)
 #define DIAG_MAX_RETRIES	32
-#define DIAG_TIMEOUT		50
+#define DIAG_TIMEOUT		50 * HZ
 
 static struct dasd_discipline dasd_diag_discipline;
 
@@ -145,16 +145,9 @@ dasd_diag_erp(struct dasd_device *device)
 
 	mdsk_term_io(device);
 	rc = mdsk_init_io(device, device->block->bp_block, 0, NULL);
-	if (rc == 4) {
-		if (!(test_and_set_bit(DASD_FLAG_DEVICE_RO, &device->flags)))
-			pr_warning("%s: The access mode of a DIAG device "
-				   "changed to read-only\n",
-				   dev_name(&device->cdev->dev));
-		rc = 0;
-	}
 	if (rc)
-		pr_warning("%s: DIAG ERP failed with "
-			    "rc=%d\n", dev_name(&device->cdev->dev), rc);
+		dev_warn(&device->cdev->dev, "DIAG ERP failed with "
+			    "rc=%d\n", rc);
 }
 
 /* Start a given request at the device. Return zero on success, non-zero
@@ -209,7 +202,6 @@ dasd_start_diag(struct dasd_ccw_req * cqr)
 		rc = -EIO;
 		break;
 	}
-	cqr->intrc = rc;
 	return rc;
 }
 
@@ -229,27 +221,29 @@ dasd_diag_term_IO(struct dasd_ccw_req * cqr)
 }
 
 /* Handle external interruption. */
-static void dasd_ext_handler(unsigned int ext_int_code,
-			     unsigned int param32, unsigned long param64)
+static void
+dasd_ext_handler(__u16 code)
 {
 	struct dasd_ccw_req *cqr, *next;
 	struct dasd_device *device;
 	unsigned long long expires;
 	unsigned long flags;
+	u8 int_code, status;
 	addr_t ip;
 	int rc;
 
-	switch (ext_int_code >> 24) {
+	int_code = *((u8 *) DASD_DIAG_LC_INT_CODE);
+	status = *((u8 *) DASD_DIAG_LC_INT_STATUS);
+	switch (int_code) {
 	case DASD_DIAG_CODE_31BIT:
-		ip = (addr_t) param32;
+		ip = (addr_t) *((u32 *) DASD_DIAG_LC_INT_PARM_31BIT);
 		break;
 	case DASD_DIAG_CODE_64BIT:
-		ip = (addr_t) param64;
+		ip = (addr_t) *((u64 *) DASD_DIAG_LC_INT_PARM_64BIT);
 		break;
 	default:
 		return;
 	}
-	kstat_cpu(smp_processor_id()).irqs[EXTINT_DSD]++;
 	if (!ip) {		/* no intparm: unsolicited interrupt */
 		DBF_EVENT(DBF_NOTICE, "%s", "caught unsolicited "
 			      "interrupt");
@@ -280,7 +274,7 @@ static void dasd_ext_handler(unsigned int ext_int_code,
 	cqr->stopclk = get_clock();
 
 	expires = 0;
-	if ((ext_int_code & 0xff0000) == 0) {
+	if (status == 0) {
 		cqr->status = DASD_CQR_SUCCESS;
 		/* Start first request on queue if possible -> fast_io. */
 		if (!list_empty(&device->ccw_queue)) {
@@ -295,8 +289,8 @@ static void dasd_ext_handler(unsigned int ext_int_code,
 	} else {
 		cqr->status = DASD_CQR_QUEUED;
 		DBF_DEV_EVENT(DBF_DEBUG, device, "interrupt status for "
-			      "request %p was %d (%d retries left)", cqr,
-			      (ext_int_code >> 16) & 0xff, cqr->retries);
+			    "request %p was %d (%d retries left)", cqr, status,
+			    cqr->retries);
 		dasd_diag_erp(device);
 	}
 
@@ -359,8 +353,6 @@ dasd_diag_check_device(struct dasd_device *device)
 		goto out;
 	}
 
-	device->default_expires = DIAG_TIMEOUT;
-
 	/* Figure out position of label block */
 	switch (private->rdc_data.vdev_class) {
 	case DEV_CLASS_FBA:
@@ -370,9 +362,8 @@ dasd_diag_check_device(struct dasd_device *device)
 		private->pt_block = 2;
 		break;
 	default:
-		pr_warning("%s: Device type %d is not supported "
-			   "in DIAG mode\n", dev_name(&device->cdev->dev),
-			   private->rdc_data.vdev_class);
+		dev_warn(&device->cdev->dev, "Device type %d is not supported "
+			    "in DIAG mode\n", private->rdc_data.vdev_class);
 		rc = -EOPNOTSUPP;
 		goto out;
 	}
@@ -413,8 +404,8 @@ dasd_diag_check_device(struct dasd_device *device)
 		private->iob.flaga = DASD_DIAG_FLAGA_DEFAULT;
 		rc = dia250(&private->iob, RW_BIO);
 		if (rc == 3) {
-			pr_warning("%s: A 64-bit DIAG call failed\n",
-				   dev_name(&device->cdev->dev));
+			dev_warn(&device->cdev->dev,
+				"A 64-bit DIAG call failed\n");
 			rc = -EOPNOTSUPP;
 			goto out_label;
 		}
@@ -423,9 +414,8 @@ dasd_diag_check_device(struct dasd_device *device)
 			break;
 	}
 	if (bsize > PAGE_SIZE) {
-		pr_warning("%s: Accessing the DASD failed because of an "
-			   "incorrect format (rc=%d)\n",
-			   dev_name(&device->cdev->dev), rc);
+		dev_warn(&device->cdev->dev, "Accessing the DASD failed because"
+			 " of an incorrect format (rc=%d)\n", rc);
 		rc = -EIO;
 		goto out_label;
 	}
@@ -442,20 +432,16 @@ dasd_diag_check_device(struct dasd_device *device)
 	for (sb = 512; sb < bsize; sb = sb << 1)
 		block->s2b_shift++;
 	rc = mdsk_init_io(device, block->bp_block, 0, NULL);
-	if (rc && (rc != 4)) {
-		pr_warning("%s: DIAG initialization failed with rc=%d\n",
-			   dev_name(&device->cdev->dev), rc);
+	if (rc) {
+		dev_warn(&device->cdev->dev, "DIAG initialization "
+			"failed with rc=%d\n", rc);
 		rc = -EIO;
 	} else {
-		if (rc == 4)
-			set_bit(DASD_FLAG_DEVICE_RO, &device->flags);
-		pr_info("%s: New DASD with %ld byte/block, total size %ld "
-			"KB%s\n", dev_name(&device->cdev->dev),
-			(unsigned long) block->bp_block,
-			(unsigned long) (block->blocks <<
-					 block->s2b_shift) >> 1,
-			(rc == 4) ? ", read-only device" : "");
-		rc = 0;
+		dev_info(&device->cdev->dev,
+			 "New DASD with %ld byte/block, total size %ld KB\n",
+			 (unsigned long) block->bp_block,
+			 (unsigned long) (block->blocks <<
+					  block->s2b_shift) >> 1);
 	}
 out_label:
 	free_page((long) label);
@@ -519,9 +505,8 @@ static struct dasd_ccw_req *dasd_diag_build_cp(struct dasd_device *memdev,
 		return ERR_PTR(-EINVAL);
 	blksize = block->bp_block;
 	/* Calculate record id of first and last block. */
-	first_rec = blk_rq_pos(req) >> block->s2b_shift;
-	last_rec =
-		(blk_rq_pos(req) + blk_rq_sectors(req) - 1) >> block->s2b_shift;
+	first_rec = req->sector >> block->s2b_shift;
+	last_rec = (req->sector + req->nr_sectors - 1) >> block->s2b_shift;
 	/* Check struct bio and count the number of blocks for the request. */
 	count = 0;
 	rq_for_each_segment(bv, req, iter) {
@@ -536,7 +521,8 @@ static struct dasd_ccw_req *dasd_diag_build_cp(struct dasd_device *memdev,
 	/* Build the request */
 	datasize = sizeof(struct dasd_diag_req) +
 		count*sizeof(struct dasd_diag_bio);
-	cqr = dasd_smalloc_request(DASD_DIAG_MAGIC, 0, datasize, memdev);
+	cqr = dasd_smalloc_request(dasd_diag_discipline.name, 0,
+				   datasize, memdev);
 	if (IS_ERR(cqr))
 		return cqr;
 
@@ -564,7 +550,7 @@ static struct dasd_ccw_req *dasd_diag_build_cp(struct dasd_device *memdev,
 	cqr->startdev = memdev;
 	cqr->memdev = memdev;
 	cqr->block = block;
-	cqr->expires = memdev->default_expires * HZ;
+	cqr->expires = DIAG_TIMEOUT;
 	cqr->status = DASD_CQR_FILLED;
 	return cqr;
 }
@@ -619,7 +605,6 @@ static struct dasd_discipline dasd_diag_discipline = {
 	.ebcname = "DIAG",
 	.max_blocks = DIAG_MAX_BLOCKS,
 	.check_device = dasd_diag_check_device,
-	.verify_path = dasd_generic_verify_path,
 	.fill_geometry = dasd_diag_fill_geometry,
 	.start_IO = dasd_start_diag,
 	.term_IO = dasd_diag_term_IO,

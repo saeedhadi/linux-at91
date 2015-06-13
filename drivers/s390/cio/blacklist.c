@@ -14,6 +14,7 @@
 
 #include <linux/init.h>
 #include <linux/vmalloc.h>
+#include <linux/slab.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <linux/ctype.h>
@@ -79,15 +80,17 @@ static int pure_hex(char **cp, unsigned int *val, int min_digit,
 		    int max_digit, int max_val)
 {
 	int diff;
+	unsigned int value;
 
 	diff = 0;
 	*val = 0;
 
-	while (diff <= max_digit) {
-		int value = hex_to_bin(**cp);
+	while (isxdigit(**cp) && (diff <= max_digit)) {
 
-		if (value < 0)
-			break;
+		if (isdigit(**cp))
+			value = **cp - '0';
+		else
+			value = tolower(**cp) - 'a' + 10;
 		*val = *val * 16 + value;
 		(*cp)++;
 		diff++;
@@ -262,11 +265,13 @@ struct ccwdev_iter {
 static void *
 cio_ignore_proc_seq_start(struct seq_file *s, loff_t *offset)
 {
-	struct ccwdev_iter *iter = s->private;
+	struct ccwdev_iter *iter;
 
 	if (*offset >= (__MAX_SUBCHANNEL + 1) * (__MAX_SSID + 1))
 		return NULL;
-	memset(iter, 0, sizeof(*iter));
+	iter = kzalloc(sizeof(struct ccwdev_iter), GFP_KERNEL);
+	if (!iter)
+		return ERR_PTR(-ENOMEM);
 	iter->ssid = *offset / (__MAX_SUBCHANNEL + 1);
 	iter->devno = *offset % (__MAX_SUBCHANNEL + 1);
 	return iter;
@@ -275,6 +280,8 @@ cio_ignore_proc_seq_start(struct seq_file *s, loff_t *offset)
 static void
 cio_ignore_proc_seq_stop(struct seq_file *s, void *it)
 {
+	if (!IS_ERR(it))
+		kfree(it);
 }
 
 static void *
@@ -371,15 +378,14 @@ static const struct seq_operations cio_ignore_proc_seq_ops = {
 static int
 cio_ignore_proc_open(struct inode *inode, struct file *file)
 {
-	return seq_open_private(file, &cio_ignore_proc_seq_ops,
-				sizeof(struct ccwdev_iter));
+	return seq_open(file, &cio_ignore_proc_seq_ops);
 }
 
 static const struct file_operations cio_ignore_proc_fops = {
 	.open    = cio_ignore_proc_open,
 	.read    = seq_read,
 	.llseek  = seq_lseek,
-	.release = seq_release_private,
+	.release = seq_release,
 	.write   = cio_ignore_write,
 };
 

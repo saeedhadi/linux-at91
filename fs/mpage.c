@@ -16,7 +16,6 @@
 #include <linux/module.h>
 #include <linux/mm.h>
 #include <linux/kdev_t.h>
-#include <linux/gfp.h>
 #include <linux/bio.h>
 #include <linux/fs.h>
 #include <linux/buffer_head.h>
@@ -40,7 +39,7 @@
  * status of that page is hard.  See end_buffer_async_read() for the details.
  * There is no point in duplicating all that complexity.
  */
-static void mpage_end_io(struct bio *bio, int err)
+static void mpage_end_io_read(struct bio *bio, int err)
 {
 	const int uptodate = test_bit(BIO_UPTODATE, &bio->bi_flags);
 	struct bio_vec *bvec = bio->bi_io_vec + bio->bi_vcnt - 1;
@@ -50,29 +49,44 @@ static void mpage_end_io(struct bio *bio, int err)
 
 		if (--bvec >= bio->bi_io_vec)
 			prefetchw(&bvec->bv_page->flags);
-		if (bio_data_dir(bio) == READ) {
-			if (uptodate) {
-				SetPageUptodate(page);
-			} else {
-				ClearPageUptodate(page);
-				SetPageError(page);
-			}
-			unlock_page(page);
-		} else { /* bio_data_dir(bio) == WRITE */
-			if (!uptodate) {
-				SetPageError(page);
-				if (page->mapping)
-					set_bit(AS_EIO, &page->mapping->flags);
-			}
-			end_page_writeback(page);
+
+		if (uptodate) {
+			SetPageUptodate(page);
+		} else {
+			ClearPageUptodate(page);
+			SetPageError(page);
 		}
+		unlock_page(page);
+	} while (bvec >= bio->bi_io_vec);
+	bio_put(bio);
+}
+
+static void mpage_end_io_write(struct bio *bio, int err)
+{
+	const int uptodate = test_bit(BIO_UPTODATE, &bio->bi_flags);
+	struct bio_vec *bvec = bio->bi_io_vec + bio->bi_vcnt - 1;
+
+	do {
+		struct page *page = bvec->bv_page;
+
+		if (--bvec >= bio->bi_io_vec)
+			prefetchw(&bvec->bv_page->flags);
+
+		if (!uptodate){
+			SetPageError(page);
+			if (page->mapping)
+				set_bit(AS_EIO, &page->mapping->flags);
+		}
+		end_page_writeback(page);
 	} while (bvec >= bio->bi_io_vec);
 	bio_put(bio);
 }
 
 static struct bio *mpage_bio_submit(int rw, struct bio *bio)
 {
-	bio->bi_end_io = mpage_end_io;
+	bio->bi_end_io = mpage_end_io_read;
+	if (rw == WRITE)
+		bio->bi_end_io = mpage_end_io_write;
 	submit_bio(rw, bio);
 	return NULL;
 }
@@ -364,12 +378,8 @@ mpage_readpages(struct address_space *mapping, struct list_head *pages,
 	sector_t last_block_in_bio = 0;
 	struct buffer_head map_bh;
 	unsigned long first_logical_block = 0;
-	struct blk_plug plug;
 
-	blk_start_plug(&plug);
-
-	map_bh.b_state = 0;
-	map_bh.b_size = 0;
+	clear_buffer_mapped(&map_bh);
 	for (page_idx = 0; page_idx < nr_pages; page_idx++) {
 		struct page *page = list_entry(pages->prev, struct page, lru);
 
@@ -388,7 +398,6 @@ mpage_readpages(struct address_space *mapping, struct list_head *pages,
 	BUG_ON(!list_empty(pages));
 	if (bio)
 		mpage_bio_submit(READ, bio);
-	blk_finish_plug(&plug);
 	return 0;
 }
 EXPORT_SYMBOL(mpage_readpages);
@@ -403,8 +412,7 @@ int mpage_readpage(struct page *page, get_block_t get_block)
 	struct buffer_head map_bh;
 	unsigned long first_logical_block = 0;
 
-	map_bh.b_state = 0;
-	map_bh.b_size = 0;
+	clear_buffer_mapped(&map_bh);
 	bio = do_mpage_readpage(bio, page, 1, &last_block_in_bio,
 			&map_bh, &first_logical_block, get_block);
 	if (bio)
@@ -551,7 +559,7 @@ page_is_mapped:
 	if (page->index >= end_index) {
 		/*
 		 * The page straddles i_size.  It must be zeroed out on each
-		 * and every writepage invocation because it may be mmapped.
+		 * and every writepage invokation because it may be mmapped.
 		 * "A file is mapped in multiples of the page size.  For a file
 		 * that is not a multiple of the page size, the remaining memory
 		 * is zeroed when mapped, and writes to that region are not
@@ -670,10 +678,7 @@ int
 mpage_writepages(struct address_space *mapping,
 		struct writeback_control *wbc, get_block_t get_block)
 {
-	struct blk_plug plug;
 	int ret;
-
-	blk_start_plug(&plug);
 
 	if (!get_block)
 		ret = generic_writepages(mapping, wbc);
@@ -689,7 +694,6 @@ mpage_writepages(struct address_space *mapping,
 		if (mpd.bio)
 			mpage_bio_submit(WRITE, mpd.bio);
 	}
-	blk_finish_plug(&plug);
 	return ret;
 }
 EXPORT_SYMBOL(mpage_writepages);

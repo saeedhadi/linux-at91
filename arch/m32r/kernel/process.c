@@ -21,10 +21,10 @@
  */
 
 #include <linux/fs.h>
-#include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/ptrace.h>
 #include <linux/unistd.h>
+#include <linux/slab.h>
 #include <linux/hardirq.h>
 
 #include <asm/io.h>
@@ -288,9 +288,8 @@ asmlinkage int sys_vfork(unsigned long r0, unsigned long r1, unsigned long r2,
 /*
  * sys_execve() executes a new program.
  */
-asmlinkage int sys_execve(const char __user *ufilename,
-			  const char __user *const __user *uargv,
-			  const char __user *const __user *uenvp,
+asmlinkage int sys_execve(char __user *ufilename, char __user * __user *uargv,
+			  char __user * __user *uenvp,
 			  unsigned long r3, unsigned long r4, unsigned long r5,
 			  unsigned long r6, struct pt_regs regs)
 {
@@ -303,6 +302,11 @@ asmlinkage int sys_execve(const char __user *ufilename,
 		goto out;
 
 	error = do_execve(filename, uargv, uenvp, &regs);
+	if (error == 0) {
+		task_lock(current);
+		current->ptrace &= ~PT_DTRACE;
+		task_unlock(current);
+	}
 	putname(filename);
 out:
 	return error;

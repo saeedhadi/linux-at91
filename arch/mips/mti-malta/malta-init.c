@@ -30,7 +30,6 @@
 #include <asm/cacheflush.h>
 #include <asm/traps.h>
 
-#include <asm/gcmpregs.h>
 #include <asm/mips-boards/prom.h>
 #include <asm/mips-boards/generic.h>
 #include <asm/mips-boards/bonito64.h>
@@ -47,7 +46,7 @@ int *_prom_argv, *_prom_envp;
  */
 #define prom_envp(index) ((char *)(long)_prom_envp[(index)])
 
-int init_debug;
+int init_debug = 0;
 
 static int mips_revision_corid;
 int mips_revision_sconid;
@@ -353,19 +352,17 @@ void __init prom_init(void)
 	board_nmi_handler_setup = mips_nmi_setup;
 	board_ejtag_handler_setup = mips_ejtag_setup;
 
+	pr_info("\nLINUX started...\n");
 	prom_init_cmdline();
 	prom_meminit();
 #ifdef CONFIG_SERIAL_8250_CONSOLE
 	console_config();
 #endif
 #ifdef CONFIG_MIPS_CMP
-	/* Early detection of CMP support */
-	if (gcmp_probe(GCMP_BASE_ADDR, GCMP_ADDRSPACE_SZ))
-		register_smp_ops(&cmp_smp_ops);
-	else
+	register_smp_ops(&cmp_smp_ops);
 #endif
 #ifdef CONFIG_MIPS_MT_SMP
-		register_smp_ops(&vsmp_smp_ops);
+	register_smp_ops(&vsmp_smp_ops);
 #endif
 #ifdef CONFIG_MIPS_MT_SMTC
 	register_smp_ops(&msmtc_smp_ops);

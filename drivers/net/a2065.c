@@ -46,6 +46,7 @@
 #include <linux/interrupt.h>
 #include <linux/ioport.h>
 #include <linux/skbuff.h>
+#include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/init.h>
 #include <linux/crc32.h>
@@ -525,7 +526,7 @@ static inline int lance_reset (struct net_device *dev)
 	load_csrs (lp);
 
 	lance_init_ring (dev);
-	dev->trans_start = jiffies; /* prevent tx timeout */
+	dev->trans_start = jiffies;
 	netif_start_queue(dev);
 
 	status = init_restart_lance (lp);
@@ -546,31 +547,38 @@ static void lance_tx_timeout(struct net_device *dev)
 	netif_wake_queue(dev);
 }
 
-static netdev_tx_t lance_start_xmit (struct sk_buff *skb,
-				     struct net_device *dev)
+static int lance_start_xmit (struct sk_buff *skb, struct net_device *dev)
 {
 	struct lance_private *lp = netdev_priv(dev);
 	volatile struct lance_regs *ll = lp->ll;
 	volatile struct lance_init_block *ib = lp->init_block;
 	int entry, skblen;
-	int status = NETDEV_TX_OK;
+	int status = 0;
 	unsigned long flags;
 
 	if (skb_padto(skb, ETH_ZLEN))
-		return NETDEV_TX_OK;
+		return 0;
 	skblen = max_t(unsigned, skb->len, ETH_ZLEN);
 
 	local_irq_save(flags);
 
 	if (!TX_BUFFS_AVAIL){
 		local_irq_restore(flags);
-		return NETDEV_TX_LOCKED;
+		return -1;
 	}
 
 #ifdef DEBUG_DRIVER
 	/* dump the packet */
-	print_hex_dump(KERN_DEBUG, "skb->data: ", DUMP_PREFIX_NONE,
-		       16, 1, skb->data, 64, true);
+	{
+		int i;
+
+		for (i = 0; i < 64; i++) {
+			if ((i % 16) == 0)
+				printk("\n" KERN_DEBUG);
+			printk ("%2.2x ", skb->data [i]);
+		}
+		printk("\n");
+	}
 #endif
 	entry = lp->tx_new & lp->tx_ring_mod_mask;
 	ib->btx_ring [entry].length = (-skblen) | 0xf000;
@@ -588,6 +596,7 @@ static netdev_tx_t lance_start_xmit (struct sk_buff *skb,
 
 	/* Kick the lance: transmit now */
 	ll->rdp = LE_C0_INEA | LE_C0_TDMD;
+	dev->trans_start = jiffies;
 	dev_kfree_skb (skb);
 
 	local_irq_restore(flags);
@@ -601,8 +610,9 @@ static void lance_load_multicast (struct net_device *dev)
 	struct lance_private *lp = netdev_priv(dev);
 	volatile struct lance_init_block *ib = lp->init_block;
 	volatile u16 *mcast_table = (u16 *)&ib->filter;
-	struct netdev_hw_addr *ha;
+	struct dev_mc_list *dmi=dev->mc_list;
 	char *addrs;
+	int i;
 	u32 crc;
 
 	/* set all multicast bits */
@@ -616,8 +626,9 @@ static void lance_load_multicast (struct net_device *dev)
 	ib->filter [1] = 0;
 
 	/* Add addresses */
-	netdev_for_each_mc_addr(ha, dev) {
-		addrs = ha->addr;
+	for (i = 0; i < dev->mc_count; i++){
+		addrs = dmi->dmi_addr;
+		dmi   = dmi->next;
 
 		/* multicast address? */
 		if (!(*addrs & 1))
@@ -627,6 +638,7 @@ static void lance_load_multicast (struct net_device *dev)
 		crc = crc >> 26;
 		mcast_table [crc >> 4] |= 1 << (crc & 0xf);
 	}
+	return;
 }
 
 static void lance_set_multicast (struct net_device *dev)
@@ -672,7 +684,6 @@ static struct zorro_device_id a2065_zorro_tbl[] __devinitdata = {
 	{ ZORRO_PROD_AMERISTAR_A2065 },
 	{ 0 }
 };
-MODULE_DEVICE_TABLE(zorro, a2065_zorro_tbl);
 
 static struct zorro_driver a2065_driver = {
 	.name		= "a2065",
@@ -711,14 +722,14 @@ static int __devinit a2065_init_one(struct zorro_dev *z,
 		return -EBUSY;
 	r2 = request_mem_region(mem_start, A2065_RAM_SIZE, "RAM");
 	if (!r2) {
-		release_mem_region(base_addr, sizeof(struct lance_regs));
+		release_resource(r1);
 		return -EBUSY;
 	}
 
 	dev = alloc_etherdev(sizeof(struct lance_private));
 	if (dev == NULL) {
-		release_mem_region(base_addr, sizeof(struct lance_regs));
-		release_mem_region(mem_start, A2065_RAM_SIZE);
+		release_resource(r1);
+		release_resource(r2);
 		return -ENOMEM;
 	}
 
@@ -764,8 +775,8 @@ static int __devinit a2065_init_one(struct zorro_dev *z,
 
 	err = register_netdev(dev);
 	if (err) {
-		release_mem_region(base_addr, sizeof(struct lance_regs));
-		release_mem_region(mem_start, A2065_RAM_SIZE);
+		release_resource(r1);
+		release_resource(r2);
 		free_netdev(dev);
 		return err;
 	}

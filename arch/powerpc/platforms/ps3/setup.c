@@ -32,7 +32,6 @@
 #include <asm/udbg.h>
 #include <asm/prom.h>
 #include <asm/lv1call.h>
-#include <asm/ps3gpu.h>
 
 #include "platform.h"
 

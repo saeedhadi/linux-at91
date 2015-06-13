@@ -36,7 +36,6 @@
 #include <linux/pci.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
-#include <linux/slab.h>
 #include <asm/io.h>
 #include <rdma/ib_mad.h>
 
@@ -713,7 +712,7 @@ int mthca_RUN_FW(struct mthca_dev *dev, u8 *status)
 
 static void mthca_setup_cmd_doorbells(struct mthca_dev *dev, u64 base)
 {
-	phys_addr_t addr;
+	unsigned long addr;
 	u16 max_off = 0;
 	int i;
 
@@ -1060,7 +1059,7 @@ int mthca_QUERY_DEV_LIM(struct mthca_dev *dev,
 	MTHCA_GET(field, outbox, QUERY_DEV_LIM_RSVD_MTT_OFFSET);
 	if (mthca_is_memfree(dev))
 		dev_lim->reserved_mtts = ALIGN((1 << (field >> 4)) * sizeof(u64),
-					       dev->limits.mtt_seg_size) / dev->limits.mtt_seg_size;
+					       MTHCA_MTT_SEG_SIZE) / MTHCA_MTT_SEG_SIZE;
 	else
 		dev_lim->reserved_mtts = 1 << (field >> 4);
 	MTHCA_GET(field, outbox, QUERY_DEV_LIM_MAX_MRW_SZ_OFFSET);
@@ -1817,7 +1816,7 @@ int mthca_CONF_SPECIAL_QP(struct mthca_dev *dev, int type, u32 qpn,
 	case IB_QPT_RAW_IPV6:
 		op_mod = 2;
 		break;
-	case IB_QPT_RAW_ETHERTYPE:
+	case IB_QPT_RAW_ETY:
 		op_mod = 3;
 		break;
 	default:

@@ -46,11 +46,10 @@ There are 4 x 12-bit Analogue Outputs.  Ranges : 5V, 10V, +/-5V, +/-10V
 
 Options:
  [0] - PCI bus number - if bus number and slot number are 0,
-			then driver search for first unused card
+                        then driver search for first unused card
  [1] - PCI slot number
 */
 
-#include <linux/interrupt.h>
 #include "../comedidev.h"
 
 #include <linux/delay.h>
@@ -110,11 +109,11 @@ Options:
 
 /*  Define analogue range */
 static const struct comedi_lrange range_analog = { 4, {
-						       UNI_RANGE(5),
-						       UNI_RANGE(10),
-						       BIP_RANGE(5),
-						       BIP_RANGE(10)
-						       }
+			UNI_RANGE(5),
+			UNI_RANGE(10),
+			BIP_RANGE(5),
+			BIP_RANGE(10)
+	}
 };
 
 static const char range_codes_analog[] = { 0x00, 0x20, 0x10, 0x30 };
@@ -124,8 +123,7 @@ static const char range_codes_analog[] = { 0x00, 0x20, 0x10, 0x30 };
 	Forward declarations
 ==============================================================================
 */
-static int icp_multi_attach(struct comedi_device *dev,
-			    struct comedi_devconfig *it);
+static int icp_multi_attach(struct comedi_device *dev, struct comedi_devconfig *it);
 static int icp_multi_detach(struct comedi_device *dev);
 
 /*
@@ -133,7 +131,7 @@ static int icp_multi_detach(struct comedi_device *dev);
 	Data & Structure declarations
 ==============================================================================
 */
-static unsigned short pci_list_builded;	/*>0 list of card is known */
+static unsigned short pci_list_builded = 0;	/*>0 list of card is known */
 
 struct boardtype {
 	const char *name;	/*  driver name */
@@ -156,47 +154,36 @@ struct boardtype {
 
 static const struct boardtype boardtypes[] = {
 	{"icp_multi",		/*  Driver name */
-	 DEVICE_ID,		/*  PCI device ID */
-	 IORANGE_ICP_MULTI,	/*  I/O range length */
-	 1,			/*  1=Card supports interrupts */
-	 TYPE_ICP_MULTI,	/*  Card type = ICP MULTI */
-	 16,			/*  Num of A/D channels */
-	 8,			/*  Num of A/D channels in diff mode */
-	 4,			/*  Num of D/A channels */
-	 16,			/*  Num of digital inputs */
-	 8,			/*  Num of digital outputs */
-	 4,			/*  Num of counters */
-	 0x0fff,		/*  Resolution of A/D */
-	 0x0fff,		/*  Resolution of D/A */
-	 &range_analog,		/*  Rangelist for A/D */
-	 range_codes_analog,	/*  Range codes for programming */
-	 &range_analog},	/*  Rangelist for D/A */
+			DEVICE_ID,	/*  PCI device ID */
+			IORANGE_ICP_MULTI,	/*  I/O range length */
+			1,	/*  1=Card supports interrupts */
+			TYPE_ICP_MULTI,	/*  Card type = ICP MULTI */
+			16,	/*  Num of A/D channels */
+			8,	/*  Num of A/D channels in diff mode */
+			4,	/*  Num of D/A channels */
+			16,	/*  Num of digital inputs */
+			8,	/*  Num of digital outputs */
+			4,	/*  Num of counters */
+			0x0fff,	/*  Resolution of A/D */
+			0x0fff,	/*  Resolution of D/A */
+			&range_analog,	/*  Rangelist for A/D */
+			range_codes_analog,	/*  Range codes for programming */
+		&range_analog},	/*  Rangelist for D/A */
 };
 
 #define n_boardtypes (sizeof(boardtypes)/sizeof(struct boardtype))
 
 static struct comedi_driver driver_icp_multi = {
-	.driver_name = "icp_multi",
-	.module = THIS_MODULE,
-	.attach = icp_multi_attach,
-	.detach = icp_multi_detach,
-	.num_names = n_boardtypes,
-	.board_name = &boardtypes[0].name,
-	.offset = sizeof(struct boardtype),
+      driver_name:"icp_multi",
+      module : THIS_MODULE,
+      attach : icp_multi_attach,
+      detach : icp_multi_detach,
+      num_names : n_boardtypes,
+      board_name : &boardtypes[0].name,
+      offset : sizeof(struct boardtype),
 };
 
-static int __init driver_icp_multi_init_module(void)
-{
-	return comedi_driver_register(&driver_icp_multi);
-}
-
-static void __exit driver_icp_multi_cleanup_module(void)
-{
-	comedi_driver_unregister(&driver_icp_multi);
-}
-
-module_init(driver_icp_multi_init_module);
-module_exit(driver_icp_multi_cleanup_module);
+COMEDI_INITCLEANUP(driver_icp_multi);
 
 struct icp_multi_private {
 	struct pcilst_struct *card;	/*  pointer to card */
@@ -211,9 +198,9 @@ struct icp_multi_private {
 	unsigned char act_chanlist_len;	/*  len of scanlist */
 	unsigned char act_chanlist_pos;	/*  actual position in MUX list */
 	unsigned int *ai_chanlist;	/*  actaul chanlist */
-	short *ai_data;		/*  data buffer */
+	short *ai_data;	/*  data buffer */
 	short ao_data[4];	/*  data output buffer */
-	short di_data;		/*  Digital input data */
+	short di_data;	/*  Digital input data */
 	unsigned int do_data;	/*  Remember digital output data */
 };
 
@@ -227,13 +214,11 @@ struct icp_multi_private {
 */
 
 #if 0
-static int check_channel_list(struct comedi_device *dev,
-			      struct comedi_subdevice *s,
-			      unsigned int *chanlist, unsigned int n_chan);
+static int check_channel_list(struct comedi_device *dev, struct comedi_subdevice *s,
+	unsigned int *chanlist, unsigned int n_chan);
 #endif
-static void setup_channel_list(struct comedi_device *dev,
-			       struct comedi_subdevice *s,
-			       unsigned int *chanlist, unsigned int n_chan);
+static void setup_channel_list(struct comedi_device *dev, struct comedi_subdevice *s,
+	unsigned int *chanlist, unsigned int n_chan);
 static int icp_multi_reset(struct comedi_device *dev);
 
 /*
@@ -245,29 +230,28 @@ static int icp_multi_reset(struct comedi_device *dev);
 /*
 ==============================================================================
 
-Name:	icp_multi_insn_read_ai
+	Name:	icp_multi_insn_read_ai
 
-Description:
-	This function reads a single analogue input.
+	Description:
+		This function reads a single analogue input.
 
-Parameters:
-	struct comedi_device *dev	Pointer to current device structure
-	struct comedi_subdevice *s	Pointer to current subdevice structure
-	struct comedi_insn *insn	Pointer to current comedi instruction
-	unsigned int *data		Pointer to analogue input data
+	Parameters:
+		struct comedi_device *dev	Pointer to current device structure
+		struct comedi_subdevice *s	Pointer to current subdevice structure
+		struct comedi_insn *insn	Pointer to current comedi instruction
+		unsigned int *data		Pointer to analogue input data
 
-Returns:int			Nmuber of instructions executed
+	Returns:int			Nmuber of instructions executed
 
 ==============================================================================
 */
-static int icp_multi_insn_read_ai(struct comedi_device *dev,
-				  struct comedi_subdevice *s,
-				  struct comedi_insn *insn, unsigned int *data)
+static int icp_multi_insn_read_ai(struct comedi_device *dev, struct comedi_subdevice *s,
+	struct comedi_insn *insn, unsigned int *data)
 {
 	int n, timeout;
 
 #ifdef ICP_MULTI_EXTDEBUG
-	printk(KERN_DEBUG "icp multi EDBG: BGN: icp_multi_insn_read_ai(...)\n");
+	printk("icp multi EDBG: BGN: icp_multi_insn_read_ai(...)\n");
 #endif
 	/*  Disable A/D conversion ready interrupt */
 	devpriv->IntEnable &= ~ADC_READY;
@@ -277,51 +261,50 @@ static int icp_multi_insn_read_ai(struct comedi_device *dev,
 	devpriv->IntStatus |= ADC_READY;
 	writew(devpriv->IntStatus, devpriv->io_addr + ICP_MULTI_INT_STAT);
 
-	/*  Set up appropriate channel, mode and range data, for specified ch */
+	/*  Set up appropriate channel, mode and range data, for specified channel */
 	setup_channel_list(dev, s, &insn->chanspec, 1);
 
 #ifdef ICP_MULTI_EXTDEBUG
-	printk(KERN_DEBUG "icp_multi A ST=%4x IO=%p\n",
-	       readw(devpriv->io_addr + ICP_MULTI_ADC_CSR),
-	       devpriv->io_addr + ICP_MULTI_ADC_CSR);
+	printk("icp_multi A ST=%4x IO=%p\n",
+		readw(devpriv->io_addr + ICP_MULTI_ADC_CSR),
+		devpriv->io_addr + ICP_MULTI_ADC_CSR);
 #endif
 
 	for (n = 0; n < insn->n; n++) {
 		/*  Set start ADC bit */
 		devpriv->AdcCmdStatus |= ADC_ST;
 		writew(devpriv->AdcCmdStatus,
-		       devpriv->io_addr + ICP_MULTI_ADC_CSR);
+			devpriv->io_addr + ICP_MULTI_ADC_CSR);
 		devpriv->AdcCmdStatus &= ~ADC_ST;
 
 #ifdef ICP_MULTI_EXTDEBUG
-		printk(KERN_DEBUG "icp multi B n=%d ST=%4x\n", n,
-		       readw(devpriv->io_addr + ICP_MULTI_ADC_CSR));
+		printk("icp multi B n=%d ST=%4x\n", n,
+			readw(devpriv->io_addr + ICP_MULTI_ADC_CSR));
 #endif
 
-		udelay(1);
+		comedi_udelay(1);
 
 #ifdef ICP_MULTI_EXTDEBUG
-		printk(KERN_DEBUG "icp multi C n=%d ST=%4x\n", n,
-		       readw(devpriv->io_addr + ICP_MULTI_ADC_CSR));
+		printk("icp multi C n=%d ST=%4x\n", n,
+			readw(devpriv->io_addr + ICP_MULTI_ADC_CSR));
 #endif
 
 		/*  Wait for conversion to complete, or get fed up waiting */
 		timeout = 100;
 		while (timeout--) {
 			if (!(readw(devpriv->io_addr +
-				    ICP_MULTI_ADC_CSR) & ADC_BSY))
+						ICP_MULTI_ADC_CSR) & ADC_BSY))
 				goto conv_finish;
 
 #ifdef ICP_MULTI_EXTDEBUG
 			if (!(timeout % 10))
-				printk(KERN_DEBUG
-				       "icp multi D n=%d tm=%d ST=%4x\n", n,
-				       timeout,
-				       readw(devpriv->io_addr +
-					     ICP_MULTI_ADC_CSR));
+				printk("icp multi D n=%d tm=%d ST=%4x\n", n,
+					timeout,
+					readw(devpriv->io_addr +
+						ICP_MULTI_ADC_CSR));
 #endif
 
-			udelay(1);
+			comedi_udelay(1);
 		}
 
 		/*  If we reach here, a timeout has occurred */
@@ -334,21 +317,19 @@ static int icp_multi_insn_read_ai(struct comedi_device *dev,
 		/*  Clear interrupt status */
 		devpriv->IntStatus |= ADC_READY;
 		writew(devpriv->IntStatus,
-		       devpriv->io_addr + ICP_MULTI_INT_STAT);
+			devpriv->io_addr + ICP_MULTI_INT_STAT);
 
 		/*  Clear data received */
 		data[n] = 0;
 
 #ifdef ICP_MULTI_EXTDEBUG
-		printk(KERN_DEBUG
-		      "icp multi EDBG: END: icp_multi_insn_read_ai(...) n=%d\n",
-		      n);
+		printk("icp multi EDBG: END: icp_multi_insn_read_ai(...) n=%d\n", n);
 #endif
 		return -ETIME;
 
-conv_finish:
+	      conv_finish:
 		data[n] =
-		    (readw(devpriv->io_addr + ICP_MULTI_AI) >> 4) & 0x0fff;
+			(readw(devpriv->io_addr + ICP_MULTI_AI) >> 4) & 0x0fff;
 	}
 
 	/*  Disable interrupt */
@@ -360,8 +341,7 @@ conv_finish:
 	writew(devpriv->IntStatus, devpriv->io_addr + ICP_MULTI_INT_STAT);
 
 #ifdef ICP_MULTI_EXTDEBUG
-	printk(KERN_DEBUG
-	       "icp multi EDBG: END: icp_multi_insn_read_ai(...) n=%d\n", n);
+	printk("icp multi EDBG: END: icp_multi_insn_read_ai(...) n=%d\n", n);
 #endif
 	return n;
 }
@@ -369,30 +349,28 @@ conv_finish:
 /*
 ==============================================================================
 
-Name:	icp_multi_insn_write_ao
+	Name:	icp_multi_insn_write_ao
 
-Description:
-	This function writes a single analogue output.
+	Description:
+		This function writes a single analogue output.
 
-Parameters:
-	struct comedi_device *dev	Pointer to current device structure
-	struct comedi_subdevice *s	Pointer to current subdevice structure
-	struct comedi_insn *insn	Pointer to current comedi instruction
-	unsigned int *data		Pointer to analogue output data
+	Parameters:
+		struct comedi_device *dev	Pointer to current device structure
+		struct comedi_subdevice *s	Pointer to current subdevice structure
+		struct comedi_insn *insn	Pointer to current comedi instruction
+		unsigned int *data		Pointer to analogue output data
 
-Returns:int			Nmuber of instructions executed
+	Returns:int			Nmuber of instructions executed
 
 ==============================================================================
 */
-static int icp_multi_insn_write_ao(struct comedi_device *dev,
-				   struct comedi_subdevice *s,
-				   struct comedi_insn *insn, unsigned int *data)
+static int icp_multi_insn_write_ao(struct comedi_device *dev, struct comedi_subdevice *s,
+	struct comedi_insn *insn, unsigned int *data)
 {
 	int n, chan, range, timeout;
 
 #ifdef ICP_MULTI_EXTDEBUG
-	printk(KERN_DEBUG
-	       "icp multi EDBG: BGN: icp_multi_insn_write_ao(...)\n");
+	printk("icp multi EDBG: BGN: icp_multi_insn_write_ao(...)\n");
 #endif
 	/*  Disable D/A conversion ready interrupt */
 	devpriv->IntEnable &= ~DAC_READY;
@@ -418,24 +396,22 @@ static int icp_multi_insn_write_ao(struct comedi_device *dev,
 	writew(devpriv->DacCmdStatus, devpriv->io_addr + ICP_MULTI_DAC_CSR);
 
 	for (n = 0; n < insn->n; n++) {
-		/*  Wait for analogue output data register to be
-		 *  ready for new data, or get fed up waiting */
+		/*  Wait for analogue output data register to be ready for new data, or get fed up waiting */
 		timeout = 100;
 		while (timeout--) {
 			if (!(readw(devpriv->io_addr +
-				    ICP_MULTI_DAC_CSR) & DAC_BSY))
+						ICP_MULTI_DAC_CSR) & DAC_BSY))
 				goto dac_ready;
 
 #ifdef ICP_MULTI_EXTDEBUG
 			if (!(timeout % 10))
-				printk(KERN_DEBUG
-				       "icp multi A n=%d tm=%d ST=%4x\n", n,
-				       timeout,
-				       readw(devpriv->io_addr +
-					     ICP_MULTI_DAC_CSR));
+				printk("icp multi A n=%d tm=%d ST=%4x\n", n,
+					timeout,
+					readw(devpriv->io_addr +
+						ICP_MULTI_DAC_CSR));
 #endif
 
-			udelay(1);
+			comedi_udelay(1);
 		}
 
 		/*  If we reach here, a timeout has occurred */
@@ -448,26 +424,24 @@ static int icp_multi_insn_write_ao(struct comedi_device *dev,
 		/*  Clear interrupt status */
 		devpriv->IntStatus |= DAC_READY;
 		writew(devpriv->IntStatus,
-		       devpriv->io_addr + ICP_MULTI_INT_STAT);
+			devpriv->io_addr + ICP_MULTI_INT_STAT);
 
 		/*  Clear data received */
 		devpriv->ao_data[chan] = 0;
 
 #ifdef ICP_MULTI_EXTDEBUG
-		printk(KERN_DEBUG
-		     "icp multi EDBG: END: icp_multi_insn_write_ao(...) n=%d\n",
-		     n);
+		printk("icp multi EDBG: END: icp_multi_insn_write_ao(...) n=%d\n", n);
 #endif
 		return -ETIME;
 
-dac_ready:
+	      dac_ready:
 		/*  Write data to analogue output data register */
 		writew(data[n], devpriv->io_addr + ICP_MULTI_AO);
 
 		/*  Set DAC_ST bit to write the data to selected channel */
 		devpriv->DacCmdStatus |= DAC_ST;
 		writew(devpriv->DacCmdStatus,
-		       devpriv->io_addr + ICP_MULTI_DAC_CSR);
+			devpriv->io_addr + ICP_MULTI_DAC_CSR);
 		devpriv->DacCmdStatus &= ~DAC_ST;
 
 		/*  Save analogue output data */
@@ -475,8 +449,7 @@ dac_ready:
 	}
 
 #ifdef ICP_MULTI_EXTDEBUG
-	printk(KERN_DEBUG
-	       "icp multi EDBG: END: icp_multi_insn_write_ao(...) n=%d\n", n);
+	printk("icp multi EDBG: END: icp_multi_insn_write_ao(...) n=%d\n", n);
 #endif
 	return n;
 }
@@ -484,24 +457,23 @@ dac_ready:
 /*
 ==============================================================================
 
-Name:	icp_multi_insn_read_ao
+	Name:	icp_multi_insn_read_ao
 
-Description:
-	This function reads a single analogue output.
+	Description:
+		This function reads a single analogue output.
 
-Parameters:
-	struct comedi_device *dev	Pointer to current device structure
-	struct comedi_subdevice *s	Pointer to current subdevice structure
-	struct comedi_insn *insn	Pointer to current comedi instruction
-	unsigned int *data		Pointer to analogue output data
+	Parameters:
+		struct comedi_device *dev	Pointer to current device structure
+		struct comedi_subdevice *s	Pointer to current subdevice structure
+		struct comedi_insn *insn	Pointer to current comedi instruction
+		unsigned int *data		Pointer to analogue output data
 
-Returns:int			Nmuber of instructions executed
+	Returns:int			Nmuber of instructions executed
 
 ==============================================================================
 */
-static int icp_multi_insn_read_ao(struct comedi_device *dev,
-				  struct comedi_subdevice *s,
-				  struct comedi_insn *insn, unsigned int *data)
+static int icp_multi_insn_read_ao(struct comedi_device *dev, struct comedi_subdevice *s,
+	struct comedi_insn *insn, unsigned int *data)
 {
 	int n, chan;
 
@@ -518,24 +490,23 @@ static int icp_multi_insn_read_ao(struct comedi_device *dev,
 /*
 ==============================================================================
 
-Name:	icp_multi_insn_bits_di
+	Name:	icp_multi_insn_bits_di
 
-Description:
-	This function reads the digital inputs.
+	Description:
+		This function reads the digital inputs.
 
-Parameters:
-	struct comedi_device *dev	Pointer to current device structure
-	struct comedi_subdevice *s	Pointer to current subdevice structure
-	struct comedi_insn *insn	Pointer to current comedi instruction
-	unsigned int *data		Pointer to analogue output data
+	Parameters:
+		struct comedi_device *dev	Pointer to current device structure
+		struct comedi_subdevice *s	Pointer to current subdevice structure
+		struct comedi_insn *insn	Pointer to current comedi instruction
+		unsigned int *data		Pointer to analogue output data
 
-Returns:int			Nmuber of instructions executed
+	Returns:int			Nmuber of instructions executed
 
 ==============================================================================
 */
-static int icp_multi_insn_bits_di(struct comedi_device *dev,
-				  struct comedi_subdevice *s,
-				  struct comedi_insn *insn, unsigned int *data)
+static int icp_multi_insn_bits_di(struct comedi_device *dev, struct comedi_subdevice *s,
+	struct comedi_insn *insn, unsigned int *data)
 {
 	data[1] = readw(devpriv->io_addr + ICP_MULTI_DI);
 
@@ -545,34 +516,33 @@ static int icp_multi_insn_bits_di(struct comedi_device *dev,
 /*
 ==============================================================================
 
-Name:	icp_multi_insn_bits_do
+	Name:	icp_multi_insn_bits_do
 
-Description:
-	This function writes the appropriate digital outputs.
+	Description:
+		This function writes the appropriate digital outputs.
 
-Parameters:
-	struct comedi_device *dev	Pointer to current device structure
-	struct comedi_subdevice *s	Pointer to current subdevice structure
-	struct comedi_insn *insn	Pointer to current comedi instruction
-	unsigned int *data		Pointer to analogue output data
+	Parameters:
+		struct comedi_device *dev	Pointer to current device structure
+		struct comedi_subdevice *s	Pointer to current subdevice structure
+		struct comedi_insn *insn	Pointer to current comedi instruction
+		unsigned int *data		Pointer to analogue output data
 
-Returns:int			Nmuber of instructions executed
+	Returns:int			Nmuber of instructions executed
 
 ==============================================================================
 */
-static int icp_multi_insn_bits_do(struct comedi_device *dev,
-				  struct comedi_subdevice *s,
-				  struct comedi_insn *insn, unsigned int *data)
+static int icp_multi_insn_bits_do(struct comedi_device *dev, struct comedi_subdevice *s,
+	struct comedi_insn *insn, unsigned int *data)
 {
 #ifdef ICP_MULTI_EXTDEBUG
-	printk(KERN_DEBUG "icp multi EDBG: BGN: icp_multi_insn_bits_do(...)\n");
+	printk("icp multi EDBG: BGN: icp_multi_insn_bits_do(...)\n");
 #endif
 
 	if (data[0]) {
 		s->state &= ~data[0];
 		s->state |= (data[0] & data[1]);
 
-		printk(KERN_DEBUG "Digital outputs = %4x \n", s->state);
+		printk("Digital outputs = %4x \n", s->state);
 
 		writew(s->state, devpriv->io_addr + ICP_MULTI_DO);
 	}
@@ -580,7 +550,7 @@ static int icp_multi_insn_bits_do(struct comedi_device *dev,
 	data[1] = readw(devpriv->io_addr + ICP_MULTI_DI);
 
 #ifdef ICP_MULTI_EXTDEBUG
-	printk(KERN_DEBUG "icp multi EDBG: END: icp_multi_insn_bits_do(...)\n");
+	printk("icp multi EDBG: END: icp_multi_insn_bits_do(...)\n");
 #endif
 	return 2;
 }
@@ -588,24 +558,23 @@ static int icp_multi_insn_bits_do(struct comedi_device *dev,
 /*
 ==============================================================================
 
-Name:	icp_multi_insn_read_ctr
+	Name:	icp_multi_insn_read_ctr
 
-Description:
-	This function reads the specified counter.
+	Description:
+		This function reads the specified counter.
 
-Parameters:
-	struct comedi_device *dev	Pointer to current device structure
-	struct comedi_subdevice *s	Pointer to current subdevice structure
-	struct comedi_insn *insn	Pointer to current comedi instruction
-	unsigned int *data		Pointer to counter data
+	Parameters:
+		struct comedi_device *dev	Pointer to current device structure
+		struct comedi_subdevice *s	Pointer to current subdevice structure
+		struct comedi_insn *insn	Pointer to current comedi instruction
+		unsigned int *data		Pointer to counter data
 
-Returns:int			Nmuber of instructions executed
+	Returns:int			Nmuber of instructions executed
 
 ==============================================================================
 */
-static int icp_multi_insn_read_ctr(struct comedi_device *dev,
-				   struct comedi_subdevice *s,
-				   struct comedi_insn *insn, unsigned int *data)
+static int icp_multi_insn_read_ctr(struct comedi_device *dev, struct comedi_subdevice *s,
+	struct comedi_insn *insn, unsigned int *data)
 {
 	return 0;
 }
@@ -613,25 +582,23 @@ static int icp_multi_insn_read_ctr(struct comedi_device *dev,
 /*
 ==============================================================================
 
-Name:	icp_multi_insn_write_ctr
+	Name:	icp_multi_insn_write_ctr
 
-Description:
-	This function write to the specified counter.
+	Description:
+		This function write to the specified counter.
 
-Parameters:
-	struct comedi_device *dev	Pointer to current device structure
-	struct comedi_subdevice *s	Pointer to current subdevice structure
-	struct comedi_insn *insn	Pointer to current comedi instruction
-	unsigned int *data		Pointer to counter data
+	Parameters:
+		struct comedi_device *dev	Pointer to current device structure
+		struct comedi_subdevice *s	Pointer to current subdevice structure
+		struct comedi_insn *insn	Pointer to current comedi instruction
+		unsigned int *data		Pointer to counter data
 
-Returns:int			Nmuber of instructions executed
+	Returns:int			Nmuber of instructions executed
 
 ==============================================================================
 */
-static int icp_multi_insn_write_ctr(struct comedi_device *dev,
-				    struct comedi_subdevice *s,
-				    struct comedi_insn *insn,
-				    unsigned int *data)
+static int icp_multi_insn_write_ctr(struct comedi_device *dev, struct comedi_subdevice *s,
+	struct comedi_insn *insn, unsigned int *data)
 {
 	return 0;
 }
@@ -639,27 +606,26 @@ static int icp_multi_insn_write_ctr(struct comedi_device *dev,
 /*
 ==============================================================================
 
-Name:	interrupt_service_icp_multi
+	Name:	interrupt_service_icp_multi
 
-Description:
-	This function is the interrupt service routine for all
-	interrupts generated by the icp multi board.
+	Description:
+		This function is the interrupt service routine for all
+		interrupts generated by the icp multi board.
 
-Parameters:
-	int irq
-	void *d			Pointer to current device
+	Parameters:
+		int irq
+		void *d			Pointer to current device
 
 ==============================================================================
 */
-static irqreturn_t interrupt_service_icp_multi(int irq, void *d)
+static irqreturn_t interrupt_service_icp_multi(int irq, void *d PT_REGS_ARG)
 {
 	struct comedi_device *dev = d;
 	int int_no;
 
 #ifdef ICP_MULTI_EXTDEBUG
-	printk(KERN_DEBUG
-	       "icp multi EDBG: BGN: interrupt_service_icp_multi(%d,...)\n",
-	       irq);
+	printk("icp multi EDBG: BGN: interrupt_service_icp_multi(%d,...)\n",
+		irq);
 #endif
 
 	/*  Is this interrupt from our board? */
@@ -669,9 +635,8 @@ static irqreturn_t interrupt_service_icp_multi(int irq, void *d)
 		return IRQ_NONE;
 
 #ifdef ICP_MULTI_EXTDEBUG
-	printk(KERN_DEBUG
-	       "icp multi EDBG: interrupt_service_icp_multi() ST: %4x\n",
-	       readw(devpriv->io_addr + ICP_MULTI_INT_STAT));
+	printk("icp multi EDBG: interrupt_service_icp_multi() ST: %4x\n",
+		readw(devpriv->io_addr + ICP_MULTI_INT_STAT));
 #endif
 
 	/*  Determine which interrupt is active & handle it */
@@ -698,8 +663,7 @@ static irqreturn_t interrupt_service_icp_multi(int irq, void *d)
 	}
 
 #ifdef ICP_MULTI_EXTDEBUG
-	printk(KERN_DEBUG
-	       "icp multi EDBG: END: interrupt_service_icp_multi(...)\n");
+	printk("icp multi EDBG: END: interrupt_service_icp_multi(...)\n");
 #endif
 	return IRQ_HANDLED;
 }
@@ -708,32 +672,30 @@ static irqreturn_t interrupt_service_icp_multi(int irq, void *d)
 /*
 ==============================================================================
 
-Name:	check_channel_list
+	Name:	check_channel_list
 
-Description:
-	This function checks if the channel list, provided by user
-	is built correctly
+	Description:
+		This function checks if the channel list, provided by user
+		is built correctly
 
-Parameters:
-	struct comedi_device *dev	Pointer to current service structure
-	struct comedi_subdevice *s	Pointer to current subdevice structure
-	unsigned int *chanlist	Pointer to packed channel list
-	unsigned int n_chan	Number of channels to scan
+	Parameters:
+		struct comedi_device *dev	Pointer to current sevice structure
+		struct comedi_subdevice *s	Pointer to current subdevice structure
+		unsigned int *chanlist	Pointer to packed channel list
+		unsigned int n_chan	Number of channels to scan
 
-Returns:int 0 = failure
-	    1 = success
+	Returns:int 0 = failure
+		    1 = success
 
 ==============================================================================
 */
-static int check_channel_list(struct comedi_device *dev,
-			      struct comedi_subdevice *s,
-			      unsigned int *chanlist, unsigned int n_chan)
+static int check_channel_list(struct comedi_device *dev, struct comedi_subdevice *s,
+	unsigned int *chanlist, unsigned int n_chan)
 {
 	unsigned int i;
 
 #ifdef ICP_MULTI_EXTDEBUG
-	printk(KERN_DEBUG
-	       "icp multi EDBG:  check_channel_list(...,%d)\n", n_chan);
+	printk("icp multi EDBG:  check_channel_list(...,%d)\n", n_chan);
 #endif
 	/*  Check that we at least have one channel to check */
 	if (n_chan < 1) {
@@ -746,13 +708,13 @@ static int check_channel_list(struct comedi_device *dev,
 		if (CR_AREF(chanlist[i]) == AREF_DIFF) {
 			if (CR_CHAN(chanlist[i]) > this_board->n_aichand) {
 				comedi_error(dev,
-					     "Incorrect differential ai ch-nr");
+					"Incorrect differential ai channel number");
 				return 0;
 			}
 		} else {
 			if (CR_CHAN(chanlist[i]) > this_board->n_aichan) {
 				comedi_error(dev,
-					     "Incorrect ai channel number");
+					"Incorrect ai channel number");
 				return 0;
 			}
 		}
@@ -764,33 +726,31 @@ static int check_channel_list(struct comedi_device *dev,
 /*
 ==============================================================================
 
-Name:	setup_channel_list
+	Name:	setup_channel_list
 
-Description:
-	This function sets the appropriate channel selection,
-	differential input mode and range bits in the ADC Command/
-	Status register.
+	Description:
+		This function sets the appropriate channel selection,
+		differential input mode and range bits in the ADC Command/
+		Status register.
 
-Parameters:
-	struct comedi_device *dev	Pointer to current service structure
-	struct comedi_subdevice *s	Pointer to current subdevice structure
-	unsigned int *chanlist	Pointer to packed channel list
-	unsigned int n_chan	Number of channels to scan
+	Parameters:
+		struct comedi_device *dev	Pointer to current sevice structure
+		struct comedi_subdevice *s	Pointer to current subdevice structure
+		unsigned int *chanlist	Pointer to packed channel list
+		unsigned int n_chan	Number of channels to scan
 
-Returns:Void
+	Returns:Void
 
 ==============================================================================
 */
-static void setup_channel_list(struct comedi_device *dev,
-			       struct comedi_subdevice *s,
-			       unsigned int *chanlist, unsigned int n_chan)
+static void setup_channel_list(struct comedi_device *dev, struct comedi_subdevice *s,
+	unsigned int *chanlist, unsigned int n_chan)
 {
 	unsigned int i, range, chanprog;
 	unsigned int diff;
 
 #ifdef ICP_MULTI_EXTDEBUG
-	printk(KERN_DEBUG
-	       "icp multi EDBG:  setup_channel_list(...,%d)\n", n_chan);
+	printk("icp multi EDBG:  setup_channel_list(...,%d)\n", n_chan);
 #endif
 	devpriv->act_chanlist_len = n_chan;
 	devpriv->act_chanlist_pos = 0;
@@ -808,8 +768,7 @@ static void setup_channel_list(struct comedi_device *dev,
 			chanprog &= 0x000f;
 		}
 
-		/*  Clear channel, range and input mode bits
-		 *  in A/D command/status register */
+		/*  Clear channel, range and input mode bits in A/D command/status register */
 		devpriv->AdcCmdStatus &= 0xf00f;
 
 		/*  Set channel number and differential mode status bit */
@@ -828,12 +787,11 @@ static void setup_channel_list(struct comedi_device *dev,
 
 		/* Output channel, range, mode to ICP Multi */
 		writew(devpriv->AdcCmdStatus,
-		       devpriv->io_addr + ICP_MULTI_ADC_CSR);
+			devpriv->io_addr + ICP_MULTI_ADC_CSR);
 
 #ifdef ICP_MULTI_EXTDEBUG
-		printk(KERN_DEBUG
-		       "GS: %2d. [%4x]=%4x %4x\n", i, chanprog, range,
-		       devpriv->act_chanlist[i]);
+		printk("GS: %2d. [%4x]=%4x %4x\n", i, chanprog, range,
+			devpriv->act_chanlist[i]);
 #endif
 	}
 
@@ -842,15 +800,15 @@ static void setup_channel_list(struct comedi_device *dev,
 /*
 ==============================================================================
 
-Name:	icp_multi_reset
+	Name:	icp_multi_reset
 
-Description:
-	This function resets the icp multi device to a 'safe' state
+	Description:
+		This function resets the icp multi device to a 'safe' state
 
-Parameters:
-	struct comedi_device *dev	Pointer to current service structure
+	Parameters:
+		struct comedi_device *dev	Pointer to current sevice structure
 
-Returns:int	0 = success
+	Returns:int	0 = success
 
 ==============================================================================
 */
@@ -859,8 +817,7 @@ static int icp_multi_reset(struct comedi_device *dev)
 	unsigned int i;
 
 #ifdef ICP_MULTI_EXTDEBUG
-	printk(KERN_DEBUG
-	       "icp_multi EDBG: BGN: icp_multi_reset(...)\n");
+	printk("icp_multi EDBG: BGN: icp_multi_reset(...)\n");
 #endif
 	/*  Clear INT enables and requests */
 	writew(0, devpriv->io_addr + ICP_MULTI_INT_EN);
@@ -882,17 +839,16 @@ static int icp_multi_reset(struct comedi_device *dev)
 
 			/*  Output to command / status register */
 			writew(devpriv->DacCmdStatus,
-			       devpriv->io_addr + ICP_MULTI_DAC_CSR);
+				devpriv->io_addr + ICP_MULTI_DAC_CSR);
 
 			/*  Delay to allow DAC time to recover */
-			udelay(1);
+			comedi_udelay(1);
 		}
 	/*  Digital outputs to 0 */
 	writew(0, devpriv->io_addr + ICP_MULTI_DO);
 
 #ifdef ICP_MULTI_EXTDEBUG
-	printk(KERN_DEBUG
-	       "icp multi EDBG: END: icp_multi_reset(...)\n");
+	printk("icp multi EDBG: END: icp_multi_reset(...)\n");
 #endif
 	return 0;
 }
@@ -900,22 +856,21 @@ static int icp_multi_reset(struct comedi_device *dev)
 /*
 ==============================================================================
 
-Name:	icp_multi_attach
+	Name:	icp_multi_attach
 
-Description:
-	This function sets up all the appropriate data for the current
-	device.
+	Description:
+		This function sets up all the appropriate data for the current
+		device.
 
-Parameters:
-	struct comedi_device *dev	Pointer to current device structure
-	struct comedi_devconfig *it	Pointer to current device configuration
+	Parameters:
+		struct comedi_device *dev	Pointer to current device structure
+		struct comedi_devconfig *it	Pointer to current device configuration
 
-Returns:int	0 = success
+	Returns:int	0 = success
 
 ==============================================================================
 */
-static int icp_multi_attach(struct comedi_device *dev,
-			    struct comedi_devconfig *it)
+static int icp_multi_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 {
 	struct comedi_subdevice *s;
 	int ret, subdev, n_subdevices;
@@ -924,8 +879,7 @@ static int icp_multi_attach(struct comedi_device *dev,
 	resource_size_t io_addr[5], iobase;
 	unsigned char pci_bus, pci_slot, pci_func;
 
-	printk(KERN_WARNING
-	       "icp_multi EDBG: BGN: icp_multi_attach(...)\n");
+	printk("icp_multi EDBG: BGN: icp_multi_attach(...)\n");
 
 	/*  Alocate private data storage space */
 	ret = alloc_private(dev, sizeof(struct icp_multi_private));
@@ -936,16 +890,15 @@ static int icp_multi_attach(struct comedi_device *dev,
 	if (pci_list_builded++ == 0) {
 		pci_card_list_init(PCI_VENDOR_ID_ICP,
 #ifdef ICP_MULTI_EXTDEBUG
-				   1
+			1
 #else
-				   0
+			0
 #endif
-		    );
+			);
 	}
 
-	printk(KERN_WARNING
-	       "Anne's comedi%d: icp_multi: board=%s", dev->minor,
-	       this_board->name);
+	printk("Anne's comedi%d: icp_multi: board=%s", dev->minor,
+		this_board->name);
 
 	card = select_and_alloc_pci_card(PCI_VENDOR_ID_ICP,
 					 this_board->device_id, it->options[0],
@@ -957,28 +910,26 @@ static int icp_multi_attach(struct comedi_device *dev,
 	devpriv->card = card;
 
 	if ((pci_card_data(card, &pci_bus, &pci_slot, &pci_func, &io_addr[0],
-			   &irq)) < 0) {
-		printk(KERN_WARNING " - Can't get configuration data!\n");
+				&irq)) < 0) {
+		printk(" - Can't get configuration data!\n");
 		return -EIO;
 	}
 
 	iobase = io_addr[2];
 	devpriv->phys_iobase = iobase;
 
-	printk(KERN_WARNING
-	       ", b:s:f=%d:%d:%d, io=0x%8llx \n", pci_bus, pci_slot, pci_func,
-	       (unsigned long long)iobase);
+	printk(", b:s:f=%d:%d:%d, io=0x%8llx \n", pci_bus, pci_slot, pci_func,
+		(unsigned long long)iobase);
 
 	devpriv->io_addr = ioremap(iobase, ICP_MULTI_SIZE);
 
 	if (devpriv->io_addr == NULL) {
-		printk(KERN_WARNING "ioremap failed.\n");
+		printk("ioremap failed.\n");
 		return -ENOMEM;
 	}
 #ifdef ICP_MULTI_EXTDEBUG
-	printk(KERN_DEBUG
-	       "0x%08llx mapped to %p, ", (unsigned long long)iobase,
-	       devpriv->io_addr);
+	printk("0x%08llx mapped to %p, ", (unsigned long long)iobase,
+		devpriv->io_addr);
 #endif
 
 	dev->board_name = this_board->name;
@@ -1003,22 +954,20 @@ static int icp_multi_attach(struct comedi_device *dev,
 
 	if (this_board->have_irq) {
 		if (irq) {
-			if (request_irq(irq, interrupt_service_icp_multi,
+			if (comedi_request_irq(irq, interrupt_service_icp_multi,
 					IRQF_SHARED, "Inova Icp Multi", dev)) {
-				printk(KERN_WARNING
-				    "unable to allocate IRQ %u, DISABLING IT",
-				     irq);
+				printk(", unable to allocate IRQ %u, DISABLING IT", irq);
 				irq = 0;	/* Can't use IRQ */
 			} else
-				printk(KERN_WARNING ", irq=%u", irq);
+				printk(", irq=%u", irq);
 		} else
-			printk(KERN_WARNING ", IRQ disabled");
+			printk(", IRQ disabled");
 	} else
 		irq = 0;
 
 	dev->irq = irq;
 
-	printk(KERN_WARNING ".\n");
+	printk(".\n");
 
 	subdev = 0;
 
@@ -1093,7 +1042,7 @@ static int icp_multi_attach(struct comedi_device *dev,
 	devpriv->valid = 1;
 
 #ifdef ICP_MULTI_EXTDEBUG
-	printk(KERN_DEBUG "icp multi EDBG: END: icp_multi_attach(...)\n");
+	printk("icp multi EDBG: END: icp_multi_attach(...)\n");
 #endif
 
 	return 0;
@@ -1102,16 +1051,16 @@ static int icp_multi_attach(struct comedi_device *dev,
 /*
 ==============================================================================
 
-Name:	icp_multi_detach
+	Name:	icp_multi_detach
 
-Description:
-	This function releases all the resources used by the current
-	device.
+	Description:
+		This function releases all the resources used by the current
+		device.
 
-Parameters:
-	struct comedi_device *dev	Pointer to current device structure
+	Parameters:
+		struct comedi_device *dev	Pointer to current device structure
 
-Returns:int	0 = success
+	Returns:int	0 = success
 
 ==============================================================================
 */
@@ -1123,7 +1072,7 @@ static int icp_multi_detach(struct comedi_device *dev)
 			icp_multi_reset(dev);
 
 	if (dev->irq)
-		free_irq(dev->irq, dev);
+		comedi_free_irq(dev->irq, dev);
 
 	if (dev->private && devpriv->io_addr)
 		iounmap(devpriv->io_addr);
@@ -1136,7 +1085,3 @@ static int icp_multi_detach(struct comedi_device *dev)
 
 	return 0;
 }
-
-MODULE_AUTHOR("Comedi http://www.comedi.org");
-MODULE_DESCRIPTION("Comedi low-level driver");
-MODULE_LICENSE("GPL");

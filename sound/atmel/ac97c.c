@@ -1,3 +1,5 @@
+#define DEBUG 12
+#define VERBOSE_DEBUG 12
 /*
  * Driver for Atmel AC97C
  *
@@ -33,11 +35,8 @@
 #include <linux/dw_dmac.h>
 
 #include <mach/cpu.h>
-#include <mach/gpio.h>
-
-#ifdef CONFIG_ARCH_AT91
 #include <mach/hardware.h>
-#endif
+#include <mach/gpio.h>
 
 #include "ac97c.h"
 
@@ -159,7 +158,7 @@ static struct snd_pcm_hardware atmel_ac97c_hw = {
 	.rates			= (SNDRV_PCM_RATE_CONTINUOUS),
 	.rate_min		= 4000,
 	.rate_max		= 48000,
-	.channels_min		= 1,
+	.channels_min		= 2,
 	.channels_max		= 2,
 	.buffer_bytes_max	= 2 * 2 * 64 * 2048,
 	.period_bytes_min	= 4096,
@@ -250,13 +249,14 @@ static int atmel_ac97c_playback_hw_params(struct snd_pcm_substream *substream,
 					params_buffer_bytes(hw_params));
 	if (retval < 0)
 		return retval;
-	/* snd_pcm_lib_malloc_pages returns 1 if buffer is changed. */
+
 	if (cpu_is_at32ap7000()) {
 		/* snd_pcm_lib_malloc_pages returns 1 if buffer is changed. */
 		if (retval == 1)
 			if (test_and_clear_bit(DMA_TX_READY, &chip->flags))
 				dw_dma_cyclic_free(chip->dma.tx_chan);
 	}
+
 	/* Set restrictions to params. */
 	mutex_lock(&opened_mutex);
 	chip->cur_rate = params_rate(hw_params);
@@ -274,9 +274,6 @@ static int atmel_ac97c_capture_hw_params(struct snd_pcm_substream *substream,
 
 	retval = snd_pcm_lib_malloc_pages(substream,
 					params_buffer_bytes(hw_params));
-	if (retval < 0)
-		return retval;
-	/* snd_pcm_lib_malloc_pages returns 1 if buffer is changed. */
 	if (cpu_is_at32ap7000()) {
 		if (retval < 0)
 			return retval;
@@ -322,7 +319,7 @@ static int atmel_ac97c_playback_prepare(struct snd_pcm_substream *substream)
 	int block_size = frames_to_bytes(runtime, runtime->period_size);
 	unsigned long word = ac97c_readl(chip, OCA);
 	int retval;
-
+	
 	chip->playback_period = 0;
 	word &= ~(AC97C_CH_MASK(PCM_LEFT) | AC97C_CH_MASK(PCM_RIGHT));
 
@@ -341,8 +338,8 @@ static int atmel_ac97c_playback_prepare(struct snd_pcm_substream *substream)
 	}
 	ac97c_writel(chip, OCA, word);
 
-	/* configure sample format and size */
 	word = ac97c_readl(chip, CAMR);
+	/* configure sample format and size */
 	if (chip->opened <= 1)
 		word = AC97C_CMR_DMAEN | AC97C_CMR_SIZE_16;
 	else
@@ -365,7 +362,6 @@ static int atmel_ac97c_playback_prepare(struct snd_pcm_substream *substream)
 
 	/* Enable underrun interrupt on channel A */
 	word |= AC97C_CSR_UNRUN;
-
 	ac97c_writel(chip, CAMR, word);
 
 	/* Enable channel A event interrupt */
@@ -431,9 +427,9 @@ static int atmel_ac97c_capture_prepare(struct snd_pcm_substream *substream)
 		return -EINVAL;
 	}
 	ac97c_writel(chip, ICA, word);
-
-	/* configure sample format and size */
+	
 	word = ac97c_readl(chip, CAMR);
+	/* configure sample format and size */	
 	if (chip->opened <= 1)
 		word = AC97C_CMR_DMAEN | AC97C_CMR_SIZE_16;
 	else
@@ -456,7 +452,6 @@ static int atmel_ac97c_capture_prepare(struct snd_pcm_substream *substream)
 
 	/* Enable overrun interrupt on channel A */
 	word |= AC97C_CSR_OVRUN;
-
 	ac97c_writel(chip, CAMR, word);
 
 	/* Enable channel A event interrupt */
@@ -501,10 +496,11 @@ static int
 atmel_ac97c_playback_trigger(struct snd_pcm_substream *substream, int cmd)
 {
 	struct atmel_ac97c *chip = snd_pcm_substream_chip(substream);
-	unsigned long camr, ptcr = 0;
+	unsigned long camr, casr, ptcr = 0;
 	int retval = 0;
 
 	camr = ac97c_readl(chip, CAMR);
+	ptcr = readl(chip->regs + ATMEL_PDC_PTSR);
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE: /* fall through */
@@ -545,7 +541,7 @@ static int
 atmel_ac97c_capture_trigger(struct snd_pcm_substream *substream, int cmd)
 {
 	struct atmel_ac97c *chip = snd_pcm_substream_chip(substream);
-	unsigned long camr, ptcr = 0;
+	unsigned long camr, casr, ptcr = 0;
 	int retval = 0;
 
 	camr = ac97c_readl(chip, CAMR);
@@ -715,7 +711,7 @@ static irqreturn_t atmel_ac97c_interrupt(int irq, void *dev)
 	}
 
 	if (sr & AC97C_SR_COEVT) {
-		dev_info(&chip->pdev->dev, "codec channel event%s%s%s%s%s\n",
+		dev_dbg(&chip->pdev->dev, "codec channel event%s%s%s%s%s\n",
 				cosr & AC97C_CSR_OVRUN   ? " OVRUN"   : "",
 				cosr & AC97C_CSR_RXRDY   ? " RXRDY"   : "",
 				cosr & AC97C_CSR_TXEMPTY ? " TXEMPTY" : "",
@@ -899,6 +895,10 @@ static void atmel_ac97c_reset(struct atmel_ac97c *chip)
 		/* AC97 v2.2 specifications says minimum 1 us. */
 		udelay(2);
 		gpio_set_value(chip->reset_pin, 1);
+	} else {
+		ac97c_writel(chip, MR, AC97C_MR_WRST | AC97C_MR_ENA);
+		udelay(2);
+		ac97c_writel(chip, MR, AC97C_MR_ENA);
 	}
 }
 
@@ -1019,7 +1019,7 @@ static int __devinit atmel_ac97c_probe(struct platform_device *pdev)
 			dma_cap_set(DMA_SLAVE, mask);
 
 			chip->dma.rx_chan = dma_request_channel(mask, filter,
-								dws);
+					dws);
 
 			dev_info(&chip->pdev->dev, "using %s for DMA RX\n",
 				dev_name(&chip->dma.rx_chan->dev->device));
@@ -1036,7 +1036,7 @@ static int __devinit atmel_ac97c_probe(struct platform_device *pdev)
 			dma_cap_set(DMA_SLAVE, mask);
 
 			chip->dma.tx_chan = dma_request_channel(mask, filter,
-								dws);
+					dws);
 
 			dev_info(&chip->pdev->dev, "using %s for DMA TX\n",
 				dev_name(&chip->dma.tx_chan->dev->device));
@@ -1051,7 +1051,7 @@ static int __devinit atmel_ac97c_probe(struct platform_device *pdev)
 		}
 	} else {
 		/* Just pretend that we have DMA channel(for at91 i is actually
-		 * the PDC) */
+		 * the PDC */
 		set_bit(DMA_RX_CHAN_PRESENT, &chip->flags);
 		set_bit(DMA_TX_CHAN_PRESENT, &chip->flags);
 	}
@@ -1116,7 +1116,6 @@ static int atmel_ac97c_suspend(struct platform_device *pdev, pm_message_t msg)
 			dw_dma_cyclic_stop(chip->dma.tx_chan);
 	}
 	clk_disable(chip->pclk);
-
 	return 0;
 }
 

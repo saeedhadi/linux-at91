@@ -13,6 +13,7 @@
 #include <linux/sched.h>
 #include <linux/compat.h>
 #include <linux/mount.h>
+#include <linux/smp_lock.h>
 #include <asm/current.h>
 #include <asm/uaccess.h>
 
@@ -39,7 +40,7 @@ long ext2_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		if (ret)
 			return ret;
 
-		if (!inode_owner_or_capable(inode)) {
+		if (!is_owner_or_cap(inode)) {
 			ret = -EACCES;
 			goto setflags_out;
 		}
@@ -89,7 +90,7 @@ setflags_out:
 	case EXT2_IOC_GETVERSION:
 		return put_user(inode->i_generation, (int __user *) arg);
 	case EXT2_IOC_SETVERSION:
-		if (!inode_owner_or_capable(inode))
+		if (!is_owner_or_cap(inode))
 			return -EPERM;
 		ret = mnt_want_write(filp->f_path.mnt);
 		if (ret)
@@ -115,7 +116,7 @@ setflags_out:
 		if (!test_opt(inode->i_sb, RESERVATION) ||!S_ISREG(inode->i_mode))
 			return -ENOTTY;
 
-		if (!inode_owner_or_capable(inode))
+		if (!is_owner_or_cap(inode))
 			return -EACCES;
 
 		if (get_user(rsv_window_size, (int __user *)arg))

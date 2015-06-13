@@ -53,8 +53,6 @@
 #include <asm/pmac_low_i2c.h>
 #include <asm/pmac_pfunc.h>
 
-#include "pmac.h"
-
 #undef DEBUG
 
 #ifdef DEBUG
@@ -66,11 +64,10 @@
 extern void __secondary_start_pmac_0(void);
 extern int pmac_pfunc_base_install(void);
 
-static void (*pmac_tb_freeze)(int freeze);
-static u64 timebase;
-static int tb_req;
-
 #ifdef CONFIG_PPC32
+
+/* Sync flag for HW tb sync */
+static volatile int sec_tb_reset = 0;
 
 /*
  * Powersurge (old powermac SMP) support.
@@ -297,9 +294,6 @@ static int __init smp_psurge_probe(void)
 		psurge_quad_init();
 		/* All released cards using this HW design have 4 CPUs */
 		ncpus = 4;
-		/* No sure how timebase sync works on those, let's use SW */
-		smp_ops->give_timebase = smp_generic_give_timebase;
-		smp_ops->take_timebase = smp_generic_take_timebase;
 	} else {
 		iounmap(quad_base);
 		if ((in_8(hhead_base + HHEAD_CONFIG) & 0x02) == 0) {
@@ -314,15 +308,18 @@ static int __init smp_psurge_probe(void)
 	psurge_start = ioremap(PSURGE_START, 4);
 	psurge_pri_intr = ioremap(PSURGE_PRI_INTR, 4);
 
-	/* This is necessary because OF doesn't know about the
+	/*
+	 * This is necessary because OF doesn't know about the
 	 * secondary cpu(s), and thus there aren't nodes in the
 	 * device tree for them, and smp_setup_cpu_maps hasn't
-	 * set their bits in cpu_present_mask.
+	 * set their bits in cpu_possible_map and cpu_present_map.
 	 */
 	if (ncpus > NR_CPUS)
 		ncpus = NR_CPUS;
-	for (i = 1; i < ncpus ; ++i)
-		set_cpu_present(i, true);
+	for (i = 1; i < ncpus ; ++i) {
+		cpu_set(i, cpu_present_map);
+		set_hard_smp_processor_id(i, i);
+	}
 
 	if (ppc_md.progress) ppc_md.progress("smp_psurge_probe - done", 0x352);
 
@@ -332,14 +329,8 @@ static int __init smp_psurge_probe(void)
 static void __init smp_psurge_kick_cpu(int nr)
 {
 	unsigned long start = __pa(__secondary_start_pmac_0) + nr * 8;
-	unsigned long a, flags;
-	int i, j;
-
-	/* Defining this here is evil ... but I prefer hiding that
-	 * crap to avoid giving people ideas that they can do the
-	 * same.
-	 */
-	extern volatile unsigned int cpu_callin_map[NR_CPUS];
+	unsigned long a;
+	int i;
 
 	/* may need to flush here if secondary bats aren't setup */
 	for (a = KERNELBASE; a < KERNELBASE + 0x800000; a += 32)
@@ -348,52 +339,47 @@ static void __init smp_psurge_kick_cpu(int nr)
 
 	if (ppc_md.progress) ppc_md.progress("smp_psurge_kick_cpu", 0x353);
 
-	/* This is going to freeze the timeebase, we disable interrupts */
-	local_irq_save(flags);
-
 	out_be32(psurge_start, start);
 	mb();
 
 	psurge_set_ipi(nr);
-
 	/*
 	 * We can't use udelay here because the timebase is now frozen.
 	 */
 	for (i = 0; i < 2000; ++i)
-		asm volatile("nop" : : : "memory");
+		barrier();
 	psurge_clr_ipi(nr);
 
-	/*
-	 * Also, because the timebase is frozen, we must not return to the
-	 * caller which will try to do udelay's etc... Instead, we wait -here-
-	 * for the CPU to callin.
-	 */
-	for (i = 0; i < 100000 && !cpu_callin_map[nr]; ++i) {
-		for (j = 1; j < 10000; j++)
-			asm volatile("nop" : : : "memory");
-		asm volatile("sync" : : : "memory");
-	}
-	if (!cpu_callin_map[nr])
-		goto stuck;
-
-	/* And we do the TB sync here too for standard dual CPU cards */
-	if (psurge_type == PSURGE_DUAL) {
-		while(!tb_req)
-			barrier();
-		tb_req = 0;
-		mb();
-		timebase = get_tb();
-		mb();
-		while (timebase)
-			barrier();
-		mb();
-	}
- stuck:
-	/* now interrupt the secondary, restarting both TBs */
-	if (psurge_type == PSURGE_DUAL)
-		psurge_set_ipi(1);
-
 	if (ppc_md.progress) ppc_md.progress("smp_psurge_kick_cpu - done", 0x354);
+}
+
+/*
+ * With the dual-cpu powersurge board, the decrementers and timebases
+ * of both cpus are frozen after the secondary cpu is started up,
+ * until we give the secondary cpu another interrupt.  This routine
+ * uses this to get the timebases synchronized.
+ *  -- paulus.
+ */
+static void __init psurge_dual_sync_tb(int cpu_nr)
+{
+	int t;
+
+	set_dec(tb_ticks_per_jiffy);
+	/* XXX fixme */
+	set_tb(0, 0);
+
+	if (cpu_nr > 0) {
+		mb();
+		sec_tb_reset = 1;
+		return;
+	}
+
+	/* wait for the secondary to have reset its TB before proceeding */
+	for (t = 10000000; t > 0 && !sec_tb_reset; --t)
+		;
+
+	/* now interrupt the secondary, starting both TBs */
+	psurge_set_ipi(1);
 }
 
 static struct irqaction psurge_irqaction = {
@@ -404,35 +390,36 @@ static struct irqaction psurge_irqaction = {
 
 static void __init smp_psurge_setup_cpu(int cpu_nr)
 {
-	if (cpu_nr != 0)
-		return;
 
-	/* reset the entry point so if we get another intr we won't
-	 * try to startup again */
-	out_be32(psurge_start, 0x100);
-	if (setup_irq(irq_create_mapping(NULL, 30), &psurge_irqaction))
-		printk(KERN_ERR "Couldn't get primary IPI interrupt");
+	if (cpu_nr == 0) {
+		/* If we failed to start the second CPU, we should still
+		 * send it an IPI to start the timebase & DEC or we might
+		 * have them stuck.
+		 */
+		if (num_online_cpus() < 2) {
+			if (psurge_type == PSURGE_DUAL)
+				psurge_set_ipi(1);
+			return;
+		}
+		/* reset the entry point so if we get another intr we won't
+		 * try to startup again */
+		out_be32(psurge_start, 0x100);
+		if (setup_irq(30, &psurge_irqaction))
+			printk(KERN_ERR "Couldn't get primary IPI interrupt");
+	}
+
+	if (psurge_type == PSURGE_DUAL)
+		psurge_dual_sync_tb(cpu_nr);
 }
 
 void __init smp_psurge_take_timebase(void)
 {
-	if (psurge_type != PSURGE_DUAL)
-		return;
-
-	tb_req = 1;
-	mb();
-	while (!timebase)
-		barrier();
-	mb();
-	set_tb(timebase >> 32, timebase & 0xffffffff);
-	timebase = 0;
-	mb();
-	set_dec(tb_ticks_per_jiffy/2);
+	/* Dummy implementation */
 }
 
 void __init smp_psurge_give_timebase(void)
 {
-	/* Nothing to do here */
+	/* Dummy implementation */
 }
 
 /* PowerSurge-style Macs */
@@ -450,6 +437,9 @@ struct smp_ops_t psurge_smp_ops = {
  * Core 99 and later support
  */
 
+static void (*pmac_tb_freeze)(int freeze);
+static u64 timebase;
+static int tb_req;
 
 static void smp_core99_give_timebase(void)
 {
@@ -488,6 +478,7 @@ static void __devinit smp_core99_take_timebase(void)
 	set_tb(timebase >> 32, timebase & 0xffffffff);
 	timebase = 0;
 	mb();
+	set_dec(tb_ticks_per_jiffy/2);
 
 	local_irq_restore(flags);
 }
@@ -695,9 +686,9 @@ static void __init smp_core99_setup(int ncpus)
 #ifdef CONFIG_PPC64
 
 	/* i2c based HW sync on some G5s */
-	if (of_machine_is_compatible("PowerMac7,2") ||
-	    of_machine_is_compatible("PowerMac7,3") ||
-	    of_machine_is_compatible("RackMac3,1"))
+	if (machine_is_compatible("PowerMac7,2") ||
+	    machine_is_compatible("PowerMac7,3") ||
+	    machine_is_compatible("RackMac3,1"))
 		smp_core99_setup_i2c_hwsync(ncpus);
 
 	/* pfunc based HW sync on recent G5s */
@@ -715,7 +706,7 @@ static void __init smp_core99_setup(int ncpus)
 #else /* CONFIG_PPC64 */
 
 	/* GPIO based HW sync on ppc32 Core99 */
-	if (pmac_tb_freeze == NULL && !of_machine_is_compatible("MacRISC4")) {
+	if (pmac_tb_freeze == NULL && !machine_is_compatible("MacRISC4")) {
 		struct device_node *cpu;
 		const u32 *tbprop = NULL;
 
@@ -752,7 +743,7 @@ static void __init smp_core99_setup(int ncpus)
 #endif
 
 	/* 32 bits SMP can't NAP */
-	if (!of_machine_is_compatible("MacRISC4"))
+	if (!machine_is_compatible("MacRISC4"))
 		powersave_nap = 0;
 }
 
@@ -840,186 +831,92 @@ static void __devinit smp_core99_setup_cpu(int cpu_nr)
 
 	/* Setup openpic */
 	mpic_setup_this_cpu();
-}
 
+	if (cpu_nr == 0) {
 #ifdef CONFIG_PPC64
-#ifdef CONFIG_HOTPLUG_CPU
-static int smp_core99_cpu_notify(struct notifier_block *self,
-				 unsigned long action, void *hcpu)
-{
-	int rc;
+		extern void g5_phy_disable_cpu1(void);
 
-	switch(action) {
-	case CPU_UP_PREPARE:
-	case CPU_UP_PREPARE_FROZEN:
-		/* Open i2c bus if it was used for tb sync */
-		if (pmac_tb_clock_chip_host) {
-			rc = pmac_i2c_open(pmac_tb_clock_chip_host, 1);
-			if (rc) {
-				pr_err("Failed to open i2c bus for time sync\n");
-				return notifier_from_errno(rc);
-			}
-		}
-		break;
-	case CPU_ONLINE:
-	case CPU_UP_CANCELED:
 		/* Close i2c bus if it was used for tb sync */
-		if (pmac_tb_clock_chip_host)
+		if (pmac_tb_clock_chip_host) {
 			pmac_i2c_close(pmac_tb_clock_chip_host);
-		break;
-	default:
-		break;
-	}
-	return NOTIFY_OK;
-}
+			pmac_tb_clock_chip_host	= NULL;
+		}
 
-static struct notifier_block __cpuinitdata smp_core99_cpu_nb = {
-	.notifier_call	= smp_core99_cpu_notify,
-};
-#endif /* CONFIG_HOTPLUG_CPU */
-
-static void __init smp_core99_bringup_done(void)
-{
-	extern void g5_phy_disable_cpu1(void);
-
-	/* Close i2c bus if it was used for tb sync */
-	if (pmac_tb_clock_chip_host)
-		pmac_i2c_close(pmac_tb_clock_chip_host);
-
-	/* If we didn't start the second CPU, we must take
-	 * it off the bus.
-	 */
-	if (of_machine_is_compatible("MacRISC4") &&
-	    num_online_cpus() < 2) {
-		set_cpu_present(1, false);
-		g5_phy_disable_cpu1();
-	}
-#ifdef CONFIG_HOTPLUG_CPU
-	register_cpu_notifier(&smp_core99_cpu_nb);
-#endif
-
-	if (ppc_md.progress)
-		ppc_md.progress("smp_core99_bringup_done", 0x349);
-}
+		/* If we didn't start the second CPU, we must take
+		 * it off the bus
+		 */
+		if (machine_is_compatible("MacRISC4") &&
+		    num_online_cpus() < 2)		
+			g5_phy_disable_cpu1();
 #endif /* CONFIG_PPC64 */
 
-#ifdef CONFIG_HOTPLUG_CPU
+		if (ppc_md.progress)
+			ppc_md.progress("core99_setup_cpu 0 done", 0x349);
+	}
+}
 
-static int smp_core99_cpu_disable(void)
+
+#if defined(CONFIG_HOTPLUG_CPU) && defined(CONFIG_PPC32)
+
+int smp_core99_cpu_disable(void)
 {
-	int rc = generic_cpu_disable();
-	if (rc)
-		return rc;
+	cpu_clear(smp_processor_id(), cpu_online_map);
 
+	/* XXX reset cpu affinity here */
 	mpic_cpu_set_priority(0xf);
-
+	asm volatile("mtdec %0" : : "r" (0x7fffffff));
+	mb();
+	udelay(20);
+	asm volatile("mtdec %0" : : "r" (0x7fffffff));
 	return 0;
 }
 
-#ifdef CONFIG_PPC32
+extern void low_cpu_die(void) __attribute__((noreturn)); /* in sleep.S */
+static int cpu_dead[NR_CPUS];
 
-static void pmac_cpu_die(void)
+void cpu_die(void)
 {
-	int cpu = smp_processor_id();
-
 	local_irq_disable();
-	idle_task_exit();
-	pr_debug("CPU%d offline\n", cpu);
-	generic_set_cpu_dead(cpu);
-	smp_wmb();
+	cpu_dead[smp_processor_id()] = 1;
 	mb();
 	low_cpu_die();
 }
 
-#else /* CONFIG_PPC32 */
-
-static void pmac_cpu_die(void)
+void smp_core99_cpu_die(unsigned int cpu)
 {
-	int cpu = smp_processor_id();
+	int timeout;
 
-	local_irq_disable();
-	idle_task_exit();
-
-	/*
-	 * turn off as much as possible, we'll be
-	 * kicked out as this will only be invoked
-	 * on core99 platforms for now ...
-	 */
-
-	printk(KERN_INFO "CPU#%d offline\n", cpu);
-	generic_set_cpu_dead(cpu);
-	smp_wmb();
-
-	/*
-	 * Re-enable interrupts. The NAP code needs to enable them
-	 * anyways, do it now so we deal with the case where one already
-	 * happened while soft-disabled.
-	 * We shouldn't get any external interrupts, only decrementer, and the
-	 * decrementer handler is safe for use on offline CPUs
-	 */
-	local_irq_enable();
-
-	while (1) {
-		/* let's not take timer interrupts too often ... */
-		set_dec(0x7fffffff);
-
-		/* Enter NAP mode */
-		power4_idle();
+	timeout = 1000;
+	while (!cpu_dead[cpu]) {
+		if (--timeout == 0) {
+			printk("CPU %u refused to die!\n", cpu);
+			break;
+		}
+		msleep(1);
 	}
+	cpu_dead[cpu] = 0;
 }
 
-#endif /* else CONFIG_PPC32 */
-#endif /* CONFIG_HOTPLUG_CPU */
+#endif /* CONFIG_HOTPLUG_CPU && CONFIG_PP32 */
 
 /* Core99 Macs (dual G4s and G5s) */
 struct smp_ops_t core99_smp_ops = {
 	.message_pass	= smp_mpic_message_pass,
 	.probe		= smp_core99_probe,
-#ifdef CONFIG_PPC64
-	.bringup_done	= smp_core99_bringup_done,
-#endif
 	.kick_cpu	= smp_core99_kick_cpu,
 	.setup_cpu	= smp_core99_setup_cpu,
 	.give_timebase	= smp_core99_give_timebase,
 	.take_timebase	= smp_core99_take_timebase,
 #if defined(CONFIG_HOTPLUG_CPU)
+# if defined(CONFIG_PPC32)
 	.cpu_disable	= smp_core99_cpu_disable,
+	.cpu_die	= smp_core99_cpu_die,
+# endif
+# if defined(CONFIG_PPC64)
+	.cpu_disable	= generic_cpu_disable,
 	.cpu_die	= generic_cpu_die,
+	/* intentionally do *NOT* assign cpu_enable,
+	 * the generic code will use kick_cpu then! */
+# endif
 #endif
 };
-
-void __init pmac_setup_smp(void)
-{
-	struct device_node *np;
-
-	/* Check for Core99 */
-	np = of_find_node_by_name(NULL, "uni-n");
-	if (!np)
-		np = of_find_node_by_name(NULL, "u3");
-	if (!np)
-		np = of_find_node_by_name(NULL, "u4");
-	if (np) {
-		of_node_put(np);
-		smp_ops = &core99_smp_ops;
-	}
-#ifdef CONFIG_PPC32
-	else {
-		/* We have to set bits in cpu_possible_mask here since the
-		 * secondary CPU(s) aren't in the device tree. Various
-		 * things won't be initialized for CPUs not in the possible
-		 * map, so we really need to fix it up here.
-		 */
-		int cpu;
-
-		for (cpu = 1; cpu < 4 && cpu < NR_CPUS; ++cpu)
-			set_cpu_possible(cpu, true);
-		smp_ops = &psurge_smp_ops;
-	}
-#endif /* CONFIG_PPC32 */
-
-#ifdef CONFIG_HOTPLUG_CPU
-	ppc_md.cpu_die = pmac_cpu_die;
-#endif
-}
-
-

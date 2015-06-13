@@ -29,8 +29,6 @@
 #include <linux/module.h>
 #include <linux/kprobes.h>
 #include <linux/kdebug.h>
-#include <linux/perf_event.h>
-#include <linux/magic.h>
 
 #include <asm/firmware.h>
 #include <asm/page.h>
@@ -41,7 +39,7 @@
 #include <asm/uaccess.h>
 #include <asm/tlbflush.h>
 #include <asm/siginfo.h>
-#include <mm/mmu_decl.h>
+
 
 #ifdef CONFIG_KPROBES
 static inline int notify_page_fault(struct pt_regs *regs)
@@ -152,14 +150,13 @@ int __kprobes do_page_fault(struct pt_regs *regs, unsigned long address,
 	if (!user_mode(regs) && (address >= TASK_SIZE))
 		return SIGSEGV;
 
-#if !(defined(CONFIG_4xx) || defined(CONFIG_BOOKE) || \
-			     defined(CONFIG_PPC_BOOK3S_64))
+#if !(defined(CONFIG_4xx) || defined(CONFIG_BOOKE))
   	if (error_code & DSISR_DABRMATCH) {
 		/* DABR match */
 		do_dabr(regs, address, error_code);
 		return 0;
 	}
-#endif
+#endif /* !(CONFIG_4xx || CONFIG_BOOKE)*/
 
 	if (in_atomic() || mm == NULL) {
 		if (!user_mode(regs))
@@ -172,8 +169,6 @@ int __kprobes do_page_fault(struct pt_regs *regs, unsigned long address,
 		       regs->nip, regs->msr);
 		die("Weird page fault", regs, SIGSEGV);
 	}
-
-	perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS, 1, 0, regs, address);
 
 	/* When running in the kernel we expect faults to occur only to
 	 * addresses in user space.  All other faults represent errors in the
@@ -248,12 +243,6 @@ good_area:
 		goto bad_area;
 #endif /* CONFIG_6xx */
 #if defined(CONFIG_8xx)
-	/* 8xx sometimes need to load a invalid/non-present TLBs.
-	 * These must be invalidated separately as linux mm don't.
-	 */
-	if (error_code & 0x40000000) /* no translation? */
-		_tlbil_va(address, 0, 0, 0);
-
         /* The MPC8xx seems to always set 0x80000000, which is
          * "undefined".  Of those that can be set, this is the only
          * one which seems bad.
@@ -309,7 +298,8 @@ good_area:
 	 * make sure we exit gracefully rather than endlessly redo
 	 * the fault.
 	 */
-	ret = handle_mm_fault(mm, vma, address, is_write ? FAULT_FLAG_WRITE : 0);
+ survive:
+	ret = handle_mm_fault(mm, vma, address, is_write);
 	if (unlikely(ret & VM_FAULT_ERROR)) {
 		if (ret & VM_FAULT_OOM)
 			goto out_of_memory;
@@ -319,8 +309,6 @@ good_area:
 	}
 	if (ret & VM_FAULT_MAJOR) {
 		current->maj_flt++;
-		perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS_MAJ, 1, 0,
-				     regs, address);
 #ifdef CONFIG_PPC_SMLPAR
 		if (firmware_has_feature(FW_FEATURE_CMO)) {
 			preempt_disable();
@@ -328,11 +316,8 @@ good_area:
 			preempt_enable();
 		}
 #endif
-	} else {
+	} else
 		current->min_flt++;
-		perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS_MIN, 1, 0,
-				     regs, address);
-	}
 	up_read(&mm->mmap_sem);
 	return 0;
 
@@ -360,10 +345,15 @@ bad_area_nosemaphore:
  */
 out_of_memory:
 	up_read(&mm->mmap_sem);
-	if (!user_mode(regs))
-		return SIGKILL;
-	pagefault_out_of_memory();
-	return 0;
+	if (is_global_init(current)) {
+		yield();
+		down_read(&mm->mmap_sem);
+		goto survive;
+	}
+	printk("VM: killing process %s\n", current->comm);
+	if (user_mode(regs))
+		do_group_exit(SIGKILL);
+	return SIGKILL;
 
 do_sigbus:
 	up_read(&mm->mmap_sem);
@@ -386,7 +376,6 @@ do_sigbus:
 void bad_page_fault(struct pt_regs *regs, unsigned long address, int sig)
 {
 	const struct exception_table_entry *entry;
-	unsigned long *stackend;
 
 	/* Are we prepared to handle this fault?  */
 	if ((entry = search_exception_tables(regs->nip)) != NULL) {
@@ -414,10 +403,6 @@ void bad_page_fault(struct pt_regs *regs, unsigned long address, int sig)
 	}
 	printk(KERN_ALERT "Faulting instruction address: 0x%08lx\n",
 		regs->nip);
-
-	stackend = end_of_stack(current);
-	if (current != &init_task && *stackend != STACK_END_MAGIC)
-		printk(KERN_ALERT "Thread overran stack, or stack corrupted\n");
 
 	die("Kernel access of bad area", regs, sig);
 }

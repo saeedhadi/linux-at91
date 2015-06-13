@@ -1,7 +1,6 @@
 /*
- * Copyright IBM Corp. 2008, 2009
- *
- * Author(s): Heiko Carstens <heiko.carstens@de.ibm.com>
+ *    Copyright IBM Corp. 2008
+ *    Author(s): Heiko Carstens <heiko.carstens@de.ibm.com>
  */
 
 #include <linux/kernel.h>
@@ -9,6 +8,20 @@
 #include <asm/ipl.h>
 #include <asm/sclp.h>
 #include <asm/setup.h>
+
+static inline int tprot(unsigned long addr)
+{
+	int rc = -EFAULT;
+
+	asm volatile(
+		"	tprot	0(%1),0\n"
+		"0:	ipm	%0\n"
+		"	srl	%0,28\n"
+		"1:\n"
+		EX_TABLE(0b,1b)
+		: "+d" (rc) : "a" (addr) : "cc");
+	return rc;
+}
 
 #define ADDR2G (1ULL << 31)
 
@@ -54,11 +67,11 @@ void detect_memory_layout(struct mem_chunk chunk[])
 	 * right thing and we don't get scheduled away with low address
 	 * protection disabled.
 	 */
-	flags = __arch_local_irq_stnsm(0xf8);
+	flags = __raw_local_irq_stnsm(0xf8);
 	__ctl_store(cr0, 0, 0);
 	__ctl_clear_bit(0, 28);
 	find_memory_chunks(chunk);
 	__ctl_load(cr0, 0, 0);
-	arch_local_irq_restore(flags);
+	__raw_local_irq_ssm(flags);
 }
 EXPORT_SYMBOL(detect_memory_layout);

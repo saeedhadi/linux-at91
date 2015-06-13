@@ -121,8 +121,8 @@ static struct clk ssc1_clk = {
 	.pmc_mask	= 1 << AT91SAM9G45_ID_SSC1,
 	.type		= CLK_TYPE_PERIPHERAL,
 };
-static struct clk tcb0_clk = {
-	.name		= "tcb0_clk",
+static struct clk tcb_clk = {
+	.name		= "tcb_clk",
 	.pmc_mask	= 1 << AT91SAM9G45_ID_TCB,
 	.type		= CLK_TYPE_PERIPHERAL,
 };
@@ -177,7 +177,7 @@ static struct clk mmc1_clk = {
 	.type		= CLK_TYPE_PERIPHERAL,
 };
 
-/* Video decoder clock - Only for sam9m10/sam9m11 */
+/* Video decoder clock - Only for sam9m10 */
 static struct clk vdec_clk = {
 	.name		= "vdec_clk",
 	.pmc_mask	= 1 << AT91SAM9G45_ID_VDEC,
@@ -190,14 +190,6 @@ static struct clk ohci_clk = {
 	.pmc_mask	= 0,
 	.type		= CLK_TYPE_PERIPHERAL,
 	.parent		= &uhphs_clk,
-};
-
-/* One additional fake clock for second TC block */
-static struct clk tcb1_clk = {
-	.name		= "tcb1_clk",
-	.pmc_mask	= 0,
-	.type		= CLK_TYPE_PERIPHERAL,
-	.parent		= &tcb0_clk,
 };
 
 static struct clk *periph_clocks[] __initdata = {
@@ -216,7 +208,7 @@ static struct clk *periph_clocks[] __initdata = {
 	&spi1_clk,
 	&ssc0_clk,
 	&ssc1_clk,
-	&tcb0_clk,
+	&tcb_clk,
 	&pwm_clk,
 	&tsc_clk,
 	&dma_clk,
@@ -229,7 +221,6 @@ static struct clk *periph_clocks[] __initdata = {
 	&mmc1_clk,
 	// irq0
 	&ohci_clk,
-	&tcb1_clk,
 };
 
 /*
@@ -256,7 +247,7 @@ static void __init at91sam9g45_register_clocks(void)
 	for (i = 0; i < ARRAY_SIZE(periph_clocks); i++)
 		clk_register(periph_clocks[i]);
 
-	if (cpu_is_at91sam9m10() || cpu_is_at91sam9m11())
+	if(cpu_is_at91sam9m10())
 		clk_register(&vdec_clk);
 
 	clk_register(&pck0);

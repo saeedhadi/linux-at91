@@ -26,10 +26,10 @@
 #include <asm/byteorder.h>
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
-#include <linux/if_ether.h>
 
 // General definitions
-#define PKT_TYPE_LACPDU         cpu_to_be16(ETH_P_SLOW)
+#define BOND_ETH_P_LACPDU       0x8809
+#define PKT_TYPE_LACPDU         cpu_to_be16(BOND_ETH_P_LACPDU)
 #define AD_TIMER_INTERVAL       100 /*msec*/
 
 #define MULTICAST_LACPDU_ADDR    {0x01, 0x80, 0xC2, 0x00, 0x00, 0x02}
@@ -39,7 +39,7 @@
 
 typedef struct mac_addr {
 	u8 mac_addr_value[ETH_ALEN];
-} __packed mac_addr_t;
+} mac_addr_t;
 
 enum {
 	BOND_AD_STABLE = 0,
@@ -134,12 +134,12 @@ typedef struct lacpdu {
 	u8 tlv_type_terminator;	     // = terminator
 	u8 terminator_length;	     // = 0
 	u8 reserved_50[50];	     // = 0
-} __packed lacpdu_t;
+} lacpdu_t;
 
 typedef struct lacpdu_header {
 	struct ethhdr hdr;
 	struct lacpdu lacpdu;
-} __packed lacpdu_header_t;
+} lacpdu_header_t;
 
 // Marker Protocol Data Unit(PDU) structure(43.5.3.2 in the 802.3ad standard)
 typedef struct bond_marker {
@@ -155,12 +155,12 @@ typedef struct bond_marker {
 	u8 tlv_type_terminator;	     //  = 0x00
 	u8 terminator_length;	     //  = 0x00
 	u8 reserved_90[90];	     //  = 0
-} __packed bond_marker_t;
+} bond_marker_t;
 
 typedef struct bond_marker_header {
 	struct ethhdr hdr;
 	struct bond_marker marker;
-} __packed bond_marker_header_t;
+} bond_marker_header_t;
 
 #pragma pack()
 
@@ -264,8 +264,7 @@ struct ad_bond_info {
 struct ad_slave_info {
 	struct aggregator aggregator;	    // 802.3ad aggregator structure
 	struct port port;		    // 802.3ad port structure
-	spinlock_t state_machine_lock; /* mutex state machines vs.
-					  incoming LACPDU */
+	spinlock_t rx_machine_lock; // To avoid race condition between callback and receive interrupt
 	u16 id;
 };
 

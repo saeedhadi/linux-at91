@@ -24,6 +24,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/delay.h>
+#include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
@@ -232,17 +233,9 @@ static int i2c_inb(struct i2c_adapter *i2c_adap)
  * Sanity check for the adapter hardware - check the reaction of
  * the bus lines only if it seems to be idle.
  */
-static int test_bus(struct i2c_adapter *i2c_adap)
+static int test_bus(struct i2c_algo_bit_data *adap, char *name)
 {
-	struct i2c_algo_bit_data *adap = i2c_adap->algo_data;
-	const char *name = i2c_adap->name;
-	int scl, sda, ret;
-
-	if (adap->pre_xfer) {
-		ret = adap->pre_xfer(i2c_adap);
-		if (ret < 0)
-			return -ENODEV;
-	}
+	int scl, sda;
 
 	if (adap->getscl == NULL)
 		pr_info("%s: Testing SDA only, SCL is not readable\n", name);
@@ -305,19 +298,11 @@ static int test_bus(struct i2c_adapter *i2c_adap)
 		       "while pulling SCL high!\n", name);
 		goto bailout;
 	}
-
-	if (adap->post_xfer)
-		adap->post_xfer(i2c_adap);
-
 	pr_info("%s: Test OK\n", name);
 	return 0;
 bailout:
 	sdahi(adap);
 	sclhi(adap);
-
-	if (adap->post_xfer)
-		adap->post_xfer(i2c_adap);
-
 	return -ENODEV;
 }
 
@@ -537,12 +522,6 @@ static int bit_xfer(struct i2c_adapter *i2c_adap,
 	int i, ret;
 	unsigned short nak_ok;
 
-	if (adap->pre_xfer) {
-		ret = adap->pre_xfer(i2c_adap);
-		if (ret < 0)
-			return ret;
-	}
-
 	bit_dbg(3, &i2c_adap->dev, "emitting start condition\n");
 	i2c_start(adap);
 	for (i = 0; i < num; i++) {
@@ -591,9 +570,6 @@ static int bit_xfer(struct i2c_adapter *i2c_adap,
 bailout:
 	bit_dbg(3, &i2c_adap->dev, "emitting stop condition\n");
 	i2c_stop(adap);
-
-	if (adap->post_xfer)
-		adap->post_xfer(i2c_adap);
 	return ret;
 }
 
@@ -616,14 +592,12 @@ static const struct i2c_algorithm i2c_bit_algo = {
 /*
  * registering functions to load algorithms at runtime
  */
-static int __i2c_bit_add_bus(struct i2c_adapter *adap,
-			     int (*add_adapter)(struct i2c_adapter *))
+static int i2c_bit_prepare_bus(struct i2c_adapter *adap)
 {
 	struct i2c_algo_bit_data *bit_adap = adap->algo_data;
-	int ret;
 
 	if (bit_test) {
-		ret = test_bus(adap);
+		int ret = test_bus(bit_adap, adap->name);
 		if (ret < 0)
 			return -ENODEV;
 	}
@@ -632,27 +606,30 @@ static int __i2c_bit_add_bus(struct i2c_adapter *adap,
 	adap->algo = &i2c_bit_algo;
 	adap->retries = 3;
 
-	ret = add_adapter(adap);
-	if (ret < 0)
-		return ret;
-
-	/* Complain if SCL can't be read */
-	if (bit_adap->getscl == NULL) {
-		dev_warn(&adap->dev, "Not I2C compliant: can't read SCL\n");
-		dev_warn(&adap->dev, "Bus may be unreliable\n");
-	}
 	return 0;
 }
 
 int i2c_bit_add_bus(struct i2c_adapter *adap)
 {
-	return __i2c_bit_add_bus(adap, i2c_add_adapter);
+	int err;
+
+	err = i2c_bit_prepare_bus(adap);
+	if (err)
+		return err;
+
+	return i2c_add_adapter(adap);
 }
 EXPORT_SYMBOL(i2c_bit_add_bus);
 
 int i2c_bit_add_numbered_bus(struct i2c_adapter *adap)
 {
-	return __i2c_bit_add_bus(adap, i2c_add_numbered_adapter);
+	int err;
+
+	err = i2c_bit_prepare_bus(adap);
+	if (err)
+		return err;
+
+	return i2c_add_numbered_adapter(adap);
 }
 EXPORT_SYMBOL(i2c_bit_add_numbered_bus);
 

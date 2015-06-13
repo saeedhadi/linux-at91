@@ -252,9 +252,9 @@ reserve_std_resources(void)
 }
 
 #define PFN_MAX		PFN_DOWN(0x80000000)
-#define for_each_mem_cluster(memdesc, _cluster, i)		\
-	for ((_cluster) = (memdesc)->cluster, (i) = 0;		\
-	     (i) < (memdesc)->numclusters; (i)++, (_cluster)++)
+#define for_each_mem_cluster(memdesc, cluster, i)		\
+	for ((cluster) = (memdesc)->cluster, (i) = 0;		\
+	     (i) < (memdesc)->numclusters; (i)++, (cluster)++)
 
 static unsigned long __init
 get_mem_size_limit(char *s)
@@ -1404,6 +1404,8 @@ determine_cpu_caches (unsigned int cpu_type)
 	case PCA56_CPU:
 	case PCA57_CPU:
 	  {
+		unsigned long cbox_config, size;
+
 		if (cpu_type == PCA56_CPU) {
 			L1I = CSHAPE(16*1024, 6, 1);
 			L1D = CSHAPE(8*1024, 5, 1);
@@ -1413,12 +1415,10 @@ determine_cpu_caches (unsigned int cpu_type)
 		}
 		L3 = -1;
 
-#if 0
-		unsigned long cbox_config, size;
-
 		cbox_config = *(vulp) phys_to_virt (0xfffff00008UL);
 		size = 512*1024 * (1 << ((cbox_config >> 12) & 3));
 
+#if 0
 		L2 = ((cbox_config >> 31) & 1 ? CSHAPE (size, 6, 1) : -1);
 #else
 		L2 = external_cache_probe(512*1024, 6);

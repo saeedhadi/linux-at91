@@ -17,7 +17,6 @@
 #include <linux/nfs_fs_sb.h>
 #include <linux/in6.h>
 #include <linux/seq_file.h>
-#include <linux/slab.h>
 
 #include "internal.h"
 #include "iostat.h"
@@ -59,34 +58,17 @@ void nfs_fscache_release_client_cookie(struct nfs_client *clp)
 /*
  * Get the cache cookie for an NFS superblock.  We have to handle
  * uniquification here because the cache doesn't do it for us.
- *
- * The default uniquifier is just an empty string, but it may be overridden
- * either by the 'fsc=xxx' option to mount, or by inheriting it from the parent
- * superblock across an automount point of some nature.
  */
-void nfs_fscache_get_super_cookie(struct super_block *sb, const char *uniq,
-				  struct nfs_clone_mount *mntdata)
+void nfs_fscache_get_super_cookie(struct super_block *sb,
+				  struct nfs_parsed_mount_data *data)
 {
 	struct nfs_fscache_key *key, *xkey;
 	struct nfs_server *nfss = NFS_SB(sb);
 	struct rb_node **p, *parent;
+	const char *uniq = data->fscache_uniq ?: "";
 	int diff, ulen;
 
-	if (uniq) {
-		ulen = strlen(uniq);
-	} else if (mntdata) {
-		struct nfs_server *mnt_s = NFS_SB(mntdata->sb);
-		if (mnt_s->fscache_key) {
-			uniq = mnt_s->fscache_key->key.uniquifier;
-			ulen = mnt_s->fscache_key->key.uniq_len;
-		}
-	}
-
-	if (!uniq) {
-		uniq = "";
-		ulen = 1;
-	}
-
+	ulen = strlen(uniq);
 	key = kzalloc(sizeof(*key) + ulen, GFP_KERNEL);
 	if (!key)
 		return;
@@ -355,17 +337,22 @@ void nfs_fscache_reset_inode_cookie(struct inode *inode)
  */
 int nfs_fscache_release_page(struct page *page, gfp_t gfp)
 {
-	if (PageFsCache(page)) {
-		struct nfs_inode *nfsi = NFS_I(page->mapping->host);
-		struct fscache_cookie *cookie = nfsi->fscache;
+	struct nfs_inode *nfsi = NFS_I(page->mapping->host);
+	struct fscache_cookie *cookie = nfsi->fscache;
 
-		BUG_ON(!cookie);
+	BUG_ON(!cookie);
+
+	if (fscache_check_page_write(cookie, page)) {
+		if (!(gfp & __GFP_WAIT))
+			return 0;
+		fscache_wait_on_page_write(cookie, page);
+	}
+
+	if (PageFsCache(page)) {
 		dfprintk(FSCACHE, "NFS: fscache releasepage (0x%p/0x%p/0x%p)\n",
 			 cookie, page, nfsi);
 
-		if (!fscache_maybe_release_page(cookie, page, gfp))
-			return 0;
-
+		fscache_uncache_page(cookie, page);
 		nfs_add_fscache_stats(page->mapping->host,
 				      NFSIOS_FSCACHE_PAGES_UNCACHED, 1);
 	}
@@ -467,8 +454,7 @@ int __nfs_readpages_from_fscache(struct nfs_open_context *ctx,
 				 struct list_head *pages,
 				 unsigned *nr_pages)
 {
-	unsigned npages = *nr_pages;
-	int ret;
+	int ret, npages = *nr_pages;
 
 	dfprintk(FSCACHE, "NFS: nfs_getpages_from_fscache (0x%p/%u/0x%p)\n",
 		 NFS_I(inode)->fscache, npages, inode);

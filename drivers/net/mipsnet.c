@@ -141,7 +141,7 @@ static int mipsnet_xmit(struct sk_buff *skb, struct net_device *dev)
 	netif_stop_queue(dev);
 	mipsnet_put_todevice(dev, skb);
 
-	return NETDEV_TX_OK;
+	return 0;
 }
 
 static inline ssize_t mipsnet_get_fromdev(struct net_device *dev, size_t len)
@@ -211,7 +211,7 @@ static int mipsnet_open(struct net_device *dev)
 {
 	int err;
 
-	err = request_irq(dev->irq, mipsnet_interrupt,
+	err = request_irq(dev->irq, &mipsnet_interrupt,
 			  IRQF_SHARED, dev->name, (void *) dev);
 	if (err) {
 		release_region(dev->base_addr, sizeof(struct mipsnet_regs));
@@ -237,17 +237,7 @@ static void mipsnet_set_mclist(struct net_device *dev)
 {
 }
 
-static const struct net_device_ops mipsnet_netdev_ops = {
-	.ndo_open		= mipsnet_open,
-	.ndo_stop		= mipsnet_close,
-	.ndo_start_xmit		= mipsnet_xmit,
-	.ndo_set_multicast_list	= mipsnet_set_mclist,
-	.ndo_change_mtu		= eth_change_mtu,
-	.ndo_validate_addr	= eth_validate_addr,
-	.ndo_set_mac_address	= eth_mac_addr,
-};
-
-static int __devinit mipsnet_probe(struct platform_device *dev)
+static int __init mipsnet_probe(struct platform_device *dev)
 {
 	struct net_device *netdev;
 	int err;
@@ -260,7 +250,10 @@ static int __devinit mipsnet_probe(struct platform_device *dev)
 
 	platform_set_drvdata(dev, netdev);
 
-	netdev->netdev_ops = &mipsnet_netdev_ops;
+	netdev->open			= mipsnet_open;
+	netdev->stop			= mipsnet_close;
+	netdev->hard_start_xmit		= mipsnet_xmit;
+	netdev->set_multicast_list	= mipsnet_set_mclist;
 
 	/*
 	 * TODO: probe for these or load them from PARAM

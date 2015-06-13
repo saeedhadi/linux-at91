@@ -9,7 +9,6 @@ struct mv_sata_platform_data;
  * Basic Orion init functions used early by machine-setup.
  */
 void orion5x_map_io(void);
-void orion5x_init_early(void);
 void orion5x_init_irq(void);
 void orion5x_init(void);
 extern int orion5x_tclk;
@@ -27,7 +26,6 @@ void orion5x_setup_dev0_win(u32 base, u32 size);
 void orion5x_setup_dev1_win(u32 base, u32 size);
 void orion5x_setup_dev2_win(u32 base, u32 size);
 void orion5x_setup_pcie_wa_win(u32 base, u32 size);
-int orion5x_setup_sram_win(void);
 
 void orion5x_ehci0_init(void);
 void orion5x_ehci1_init(void);

@@ -9,7 +9,7 @@
 #ifndef _ASM_MICROBLAZE_STRING_H
 #define _ASM_MICROBLAZE_STRING_H
 
-#ifdef __KERNEL__
+#ifndef __KERNEL__
 
 #define __HAVE_ARCH_MEMSET
 #define __HAVE_ARCH_MEMCPY

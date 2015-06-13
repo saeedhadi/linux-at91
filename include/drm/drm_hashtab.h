@@ -35,8 +35,6 @@
 #ifndef DRM_HASHTAB_H
 #define DRM_HASHTAB_H
 
-#include <linux/list.h>
-
 #define drm_hash_entry(_ptr, _type, _member) container_of(_ptr, _type, _member)
 
 struct drm_hash_item {
@@ -45,9 +43,13 @@ struct drm_hash_item {
 };
 
 struct drm_open_hash {
+	unsigned int size;
+	unsigned int order;
+	unsigned int fill;
 	struct hlist_head *table;
-	u8 order;
+	int use_vmalloc;
 };
+
 
 extern int drm_ht_create(struct drm_open_hash *ht, unsigned int order);
 extern int drm_ht_insert_item(struct drm_open_hash *ht, struct drm_hash_item *item);

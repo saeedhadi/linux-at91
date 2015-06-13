@@ -40,16 +40,9 @@ static struct inode *jffs2_alloc_inode(struct super_block *sb)
 	return &f->vfs_inode;
 }
 
-static void jffs2_i_callback(struct rcu_head *head)
-{
-	struct inode *inode = container_of(head, struct inode, i_rcu);
-	INIT_LIST_HEAD(&inode->i_dentry);
-	kmem_cache_free(jffs2_inode_cachep, JFFS2_INODE_INFO(inode));
-}
-
 static void jffs2_destroy_inode(struct inode *inode)
 {
-	call_rcu(&inode->i_rcu, jffs2_i_callback);
+	kmem_cache_free(jffs2_inode_cachep, JFFS2_INODE_INFO(inode));
 }
 
 static void jffs2_i_init_once(void *foo)
@@ -60,26 +53,9 @@ static void jffs2_i_init_once(void *foo)
 	inode_init_once(&f->vfs_inode);
 }
 
-static void jffs2_write_super(struct super_block *sb)
-{
-	struct jffs2_sb_info *c = JFFS2_SB_INFO(sb);
-
-	lock_super(sb);
-	sb->s_dirt = 0;
-
-	if (!(sb->s_flags & MS_RDONLY)) {
-		D1(printk(KERN_DEBUG "jffs2_write_super()\n"));
-		jffs2_flush_wbuf_gc(c, 0);
-	}
-
-	unlock_super(sb);
-}
-
 static int jffs2_sync_fs(struct super_block *sb, int wait)
 {
 	struct jffs2_sb_info *c = JFFS2_SB_INFO(sb);
-
-	jffs2_write_super(sb);
 
 	mutex_lock(&c->alloc_sem);
 	jffs2_flush_wbuf_pad(c);
@@ -127,7 +103,7 @@ static struct dentry *jffs2_get_parent(struct dentry *child)
 	return d_obtain_alias(jffs2_iget(child->d_inode->i_sb, pino));
 }
 
-static const struct export_operations jffs2_export_ops = {
+static struct export_operations jffs2_export_ops = {
 	.get_parent = jffs2_get_parent,
 	.fh_to_dentry = jffs2_fh_to_dentry,
 	.fh_to_parent = jffs2_fh_to_parent,
@@ -141,7 +117,7 @@ static const struct super_operations jffs2_super_operations =
 	.write_super =	jffs2_write_super,
 	.statfs =	jffs2_statfs,
 	.remount_fs =	jffs2_remount_fs,
-	.evict_inode =	jffs2_evict_inode,
+	.clear_inode =	jffs2_clear_inode,
 	.dirty_inode =	jffs2_dirty_inode,
 	.sync_fs =	jffs2_sync_fs,
 };
@@ -152,7 +128,6 @@ static const struct super_operations jffs2_super_operations =
 static int jffs2_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct jffs2_sb_info *c;
-	int ret;
 
 	D1(printk(KERN_DEBUG "jffs2_get_sb_mtd():"
 		  " New superblock for device %d (\"%s\")\n",
@@ -182,15 +157,15 @@ static int jffs2_fill_super(struct super_block *sb, void *data, int silent)
 #ifdef CONFIG_JFFS2_FS_POSIX_ACL
 	sb->s_flags |= MS_POSIXACL;
 #endif
-	ret = jffs2_do_fill_super(sb, data, silent);
-	return ret;
+	return jffs2_do_fill_super(sb, data, silent);
 }
 
-static struct dentry *jffs2_mount(struct file_system_type *fs_type,
+static int jffs2_get_sb(struct file_system_type *fs_type,
 			int flags, const char *dev_name,
-			void *data)
+			void *data, struct vfsmount *mnt)
 {
-	return mount_mtd(fs_type, flags, dev_name, data, jffs2_fill_super);
+	return get_sb_mtd(fs_type, flags, dev_name, data, jffs2_fill_super,
+			  mnt);
 }
 
 static void jffs2_put_super (struct super_block *sb)
@@ -198,9 +173,6 @@ static void jffs2_put_super (struct super_block *sb)
 	struct jffs2_sb_info *c = JFFS2_SB_INFO(sb);
 
 	D2(printk(KERN_DEBUG "jffs2: jffs2_put_super()\n"));
-
-	if (sb->s_dirt)
-		jffs2_write_super(sb);
 
 	mutex_lock(&c->alloc_sem);
 	jffs2_flush_wbuf_pad(c);
@@ -235,7 +207,7 @@ static void jffs2_kill_sb(struct super_block *sb)
 static struct file_system_type jffs2_fs_type = {
 	.owner =	THIS_MODULE,
 	.name =		"jffs2",
-	.mount =	jffs2_mount,
+	.get_sb =	jffs2_get_sb,
 	.kill_sb =	jffs2_kill_sb,
 };
 

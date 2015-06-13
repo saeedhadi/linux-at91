@@ -21,14 +21,14 @@
  * Note that with framepointer enabled, even the leaf functions have the same
  * prologue and epilogue, therefore we can ignore the LR value in this case.
  */
-int notrace unwind_frame(struct stackframe *frame)
+int unwind_frame(struct stackframe *frame)
 {
 	unsigned long high, low;
 	unsigned long fp = frame->fp;
 
 	/* only go to a higher address on the stack */
 	low = frame->sp;
-	high = ALIGN(low, THREAD_SIZE);
+	high = ALIGN(low, THREAD_SIZE) + THREAD_SIZE;
 
 	/* check current frame pointer is within bounds */
 	if (fp < (low + 12) || fp + 4 >= high)
@@ -43,7 +43,7 @@ int notrace unwind_frame(struct stackframe *frame)
 }
 #endif
 
-void notrace walk_stackframe(struct stackframe *frame,
+void walk_stackframe(struct stackframe *frame,
 		     int (*fn)(struct stackframe *, void *), void *data)
 {
 	while (1) {
@@ -94,13 +94,10 @@ void save_stack_trace_tsk(struct task_struct *tsk, struct stack_trace *trace)
 	if (tsk != current) {
 #ifdef CONFIG_SMP
 		/*
-		 * What guarantees do we have here that 'tsk' is not
-		 * running on another CPU?  For now, ignore it as we
-		 * can't guarantee we won't explode.
+		 * What guarantees do we have here that 'tsk'
+		 * is not running on another CPU?
 		 */
-		if (trace->nr_entries < trace->max_entries)
-			trace->entries[trace->nr_entries++] = ULONG_MAX;
-		return;
+		BUG();
 #else
 		data.no_sched_functions = 1;
 		frame.fp = thread_saved_fp(tsk);

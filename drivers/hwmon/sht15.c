@@ -30,13 +30,11 @@
 #include <linux/hwmon-sysfs.h>
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
-#include <linux/sched.h>
 #include <linux/delay.h>
 #include <linux/jiffies.h>
 #include <linux/err.h>
 #include <linux/sht15.h>
 #include <linux/regulator/consumer.h>
-#include <linux/slab.h>
 #include <asm/atomic.h>
 
 #define SHT15_MEASURE_TEMP	3
@@ -52,7 +50,7 @@
 #define SHT15_TSU		150	/* data setup time */
 
 /**
- * struct sht15_temppair - elements of voltage dependent temp calc
+ * struct sht15_temppair - elements of voltage dependant temp calc
  * @vdd:	supply voltage in microvolts
  * @d1:		see data sheet
  */
@@ -251,7 +249,7 @@ static inline int sht15_update_single_val(struct sht15_data *data,
 	enable_irq(gpio_to_irq(data->pdata->gpio_data));
 	if (gpio_get_value(data->pdata->gpio_data) == 0) {
 		disable_irq_nosync(gpio_to_irq(data->pdata->gpio_data));
-		/* Only relevant if the interrupt hasn't occurred. */
+		/* Only relevant if the interrupt hasn't occured. */
 		if (!atomic_read(&data->interrupt_handled))
 			schedule_work(&data->read_work);
 	}
@@ -259,7 +257,7 @@ static inline int sht15_update_single_val(struct sht15_data *data,
 				 (data->flag == SHT15_READING_NOTHING),
 				 msecs_to_jiffies(timeout_msecs));
 	if (ret == 0) {/* timeout occurred */
-		disable_irq_nosync(gpio_to_irq(data->pdata->gpio_data));
+		disable_irq_nosync(gpio_to_irq(data->pdata->gpio_data));;
 		sht15_connection_reset(data);
 		return -ETIME;
 	}
@@ -303,13 +301,13 @@ error_ret:
  **/
 static inline int sht15_calc_temp(struct sht15_data *data)
 {
-	int d1 = temppoints[0].d1;
+	int d1 = 0;
 	int i;
 
-	for (i = ARRAY_SIZE(temppoints) - 1; i > 0; i--)
+	for (i = 1; i < ARRAY_SIZE(temppoints) - 1; i++)
 		/* Find pointer to interpolate */
 		if (data->supply_uV > temppoints[i - 1].vdd) {
-			d1 = (data->supply_uV - temppoints[i - 1].vdd)
+			d1 = (data->supply_uV/1000 - temppoints[i - 1].vdd)
 				* (temppoints[i].d1 - temppoints[i - 1].d1)
 				/ (temppoints[i].vdd - temppoints[i - 1].vdd)
 				+ temppoints[i - 1].d1;
@@ -333,12 +331,12 @@ static inline int sht15_calc_humid(struct sht15_data *data)
 
 	const int c1 = -4;
 	const int c2 = 40500; /* x 10 ^ -6 */
-	const int c3 = -28; /* x 10 ^ -7 */
+	const int c3 = 2800; /* x10 ^ -9 */
 
 	RHlinear = c1*1000
 		+ c2 * data->val_humid/1000
-		+ (data->val_humid * data->val_humid * c3) / 10000;
-	return (temp - 25000) * (10000 + 80 * data->val_humid)
+		+ (data->val_humid * data->val_humid * c3)/1000000;
+	return (temp - 25000) * (10000 + 800 * data->val_humid)
 		/ 1000000 + RHlinear;
 }
 
@@ -452,7 +450,7 @@ static void sht15_bh_read_data(struct work_struct *work_s)
 		*/
 		atomic_set(&data->interrupt_handled, 0);
 		enable_irq(gpio_to_irq(data->pdata->gpio_data));
-		/* If still not occurred or another handler has been scheduled */
+		/* If still not occured or another handler has been scheduled */
 		if (gpio_get_value(data->pdata->gpio_data)
 		    || atomic_read(&data->interrupt_handled))
 			return;
@@ -542,12 +540,7 @@ static int __devinit sht15_probe(struct platform_device *pdev)
 /* If a regulator is available, query what the supply voltage actually is!*/
 	data->reg = regulator_get(data->dev, "vcc");
 	if (!IS_ERR(data->reg)) {
-		int voltage;
-
-		voltage = regulator_get_voltage(data->reg);
-		if (voltage)
-			data->supply_uV = voltage;
-
+		data->supply_uV = regulator_get_voltage(data->reg);
 		regulator_enable(data->reg);
 		/* setup a notifier block to update this if another device
 		 *  causes the voltage to change */
@@ -569,7 +562,7 @@ static int __devinit sht15_probe(struct platform_device *pdev)
 	ret = sysfs_create_group(&pdev->dev.kobj, &sht15_attr_group);
 	if (ret) {
 		dev_err(&pdev->dev, "sysfs create failed");
-		goto err_release_gpio_data;
+		goto err_free_data;
 	}
 
 	ret = request_irq(gpio_to_irq(data->pdata->gpio_data),
@@ -588,12 +581,10 @@ static int __devinit sht15_probe(struct platform_device *pdev)
 	data->hwmon_dev = hwmon_device_register(data->dev);
 	if (IS_ERR(data->hwmon_dev)) {
 		ret = PTR_ERR(data->hwmon_dev);
-		goto err_release_irq;
+		goto err_release_gpio_data;
 	}
 	return 0;
 
-err_release_irq:
-	free_irq(gpio_to_irq(data->pdata->gpio_data), data);
 err_release_gpio_data:
 	gpio_free(data->pdata->gpio_data);
 err_release_gpio_sck:
@@ -610,7 +601,7 @@ static int __devexit sht15_remove(struct platform_device *pdev)
 	struct sht15_data *data = platform_get_drvdata(pdev);
 
 	/* Make sure any reads from the device are done and
-	 * prevent new ones from beginning */
+	 * prevent new ones beginnning */
 	mutex_lock(&data->read_lock);
 	hwmon_device_unregister(data->hwmon_dev);
 	sysfs_remove_group(&pdev->dev.kobj, &sht15_attr_group);
@@ -629,47 +620,42 @@ static int __devexit sht15_remove(struct platform_device *pdev)
 }
 
 
-/*
- * sht_drivers simultaneously refers to __devinit and __devexit function
- * which causes spurious section mismatch warning. So use __refdata to
- * get rid from this.
- */
-static struct platform_driver __refdata sht_drivers[] = {
+static struct platform_driver sht_drivers[] = {
 	{
 		.driver = {
 			.name = "sht10",
 			.owner = THIS_MODULE,
 		},
 		.probe = sht15_probe,
-		.remove = __devexit_p(sht15_remove),
+		.remove = sht15_remove,
 	}, {
 		.driver = {
 			.name = "sht11",
 			.owner = THIS_MODULE,
 		},
 		.probe = sht15_probe,
-		.remove = __devexit_p(sht15_remove),
+		.remove = sht15_remove,
 	}, {
 		.driver = {
 			.name = "sht15",
 			.owner = THIS_MODULE,
 		},
 		.probe = sht15_probe,
-		.remove = __devexit_p(sht15_remove),
+		.remove = sht15_remove,
 	}, {
 		.driver = {
 			.name = "sht71",
 			.owner = THIS_MODULE,
 		},
 		.probe = sht15_probe,
-		.remove = __devexit_p(sht15_remove),
+		.remove = sht15_remove,
 	}, {
 		.driver = {
 			.name = "sht75",
 			.owner = THIS_MODULE,
 		},
 		.probe = sht15_probe,
-		.remove = __devexit_p(sht15_remove),
+		.remove = sht15_remove,
 	},
 };
 

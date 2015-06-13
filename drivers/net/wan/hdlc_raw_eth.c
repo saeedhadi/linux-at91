@@ -11,7 +11,6 @@
 
 #include <linux/errno.h>
 #include <linux/etherdevice.h>
-#include <linux/gfp.h>
 #include <linux/hdlc.h>
 #include <linux/if_arp.h>
 #include <linux/inetdevice.h>
@@ -22,10 +21,11 @@
 #include <linux/poll.h>
 #include <linux/rtnetlink.h>
 #include <linux/skbuff.h>
+#include <linux/slab.h>
 
 static int raw_eth_ioctl(struct net_device *dev, struct ifreq *ifr);
 
-static netdev_tx_t eth_tx(struct sk_buff *skb, struct net_device *dev)
+static int eth_tx(struct sk_buff *skb, struct net_device *dev)
 {
 	int pad = ETH_ZLEN - skb->len;
 	if (pad > 0) {		/* Pad the frame with zeros */

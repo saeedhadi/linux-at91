@@ -60,17 +60,12 @@ struct gether {
 
 	u16				cdc_filter;
 
-	/* hooks for added framing, as needed for RNDIS and EEM. */
+	/* hooks for added framing, as needed for RNDIS and EEM.
+	 * we currently don't support multiple frames per SKB.
+	 */
 	u32				header_len;
-	/* NCM requires fixed size bundles */
-	bool				is_fixed;
-	u32				fixed_out_len;
-	u32				fixed_in_len;
-	struct sk_buff			*(*wrap)(struct gether *port,
-						struct sk_buff *skb);
-	int				(*unwrap)(struct gether *port,
-						struct sk_buff *skb,
-						struct sk_buff_head *list);
+	struct sk_buff			*(*wrap)(struct sk_buff *skb);
+	int				(*unwrap)(struct sk_buff *skb);
 
 	/* called on network open/close */
 	void				(*open)(struct gether *);
@@ -97,6 +92,13 @@ static inline bool can_support_ecm(struct usb_gadget *gadget)
 	if (!gadget_supports_altsettings(gadget))
 		return false;
 
+	/* SA1100 can do ECM, *without* status endpoint ... but we'll
+	 * only use it in non-ECM mode for backwards compatibility
+	 * (and since we currently require a status endpoint)
+	 */
+	if (gadget_is_sa1100(gadget))
+		return false;
+
 	/* Everything else is *presumably* fine ... but this is a bit
 	 * chancy, so be **CERTAIN** there are no hardware issues with
 	 * your controller.  Add it above if it can't handle CDC.
@@ -107,10 +109,8 @@ static inline bool can_support_ecm(struct usb_gadget *gadget)
 /* each configuration may bind one instance of an ethernet link */
 int geth_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN]);
 int ecm_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN]);
-int ncm_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN]);
-int eem_bind_config(struct usb_configuration *c);
 
-#ifdef USB_ETH_RNDIS
+#ifdef CONFIG_USB_ETH_RNDIS
 
 int rndis_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN]);
 

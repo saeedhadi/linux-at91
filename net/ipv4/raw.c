@@ -60,6 +60,7 @@
 #include <net/net_namespace.h>
 #include <net/dst.h>
 #include <net/sock.h>
+#include <linux/gfp.h>
 #include <linux/ip.h>
 #include <linux/net.h>
 #include <net/ip.h>
@@ -76,7 +77,6 @@
 #include <linux/seq_file.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter_ipv4.h>
-#include <linux/compat.h>
 
 static struct raw_hashinfo raw_v4_hashinfo = {
 	.lock = __RW_LOCK_UNLOCKED(raw_v4_hashinfo.lock),
@@ -87,7 +87,7 @@ void raw_hash_sk(struct sock *sk)
 	struct raw_hashinfo *h = sk->sk_prot->h.raw_hash;
 	struct hlist_head *head;
 
-	head = &h->ht[inet_sk(sk)->inet_num & (RAW_HTABLE_SIZE - 1)];
+	head = &h->ht[inet_sk(sk)->num & (RAW_HTABLE_SIZE - 1)];
 
 	write_lock_bh(&h->lock);
 	sk_add_node(sk, head);
@@ -115,9 +115,9 @@ static struct sock *__raw_v4_lookup(struct net *net, struct sock *sk,
 	sk_for_each_from(sk, node) {
 		struct inet_sock *inet = inet_sk(sk);
 
-		if (net_eq(sock_net(sk), net) && inet->inet_num == num	&&
-		    !(inet->inet_daddr && inet->inet_daddr != raddr) 	&&
-		    !(inet->inet_rcv_saddr && inet->inet_rcv_saddr != laddr) &&
+		if (net_eq(sock_net(sk), net) && inet->num == num	&&
+		    !(inet->daddr && inet->daddr != raddr) 		&&
+		    !(inet->rcv_saddr && inet->rcv_saddr != laddr)	&&
 		    !(sk->sk_bound_dev_if && sk->sk_bound_dev_if != dif))
 			goto found; /* gotcha */
 	}
@@ -291,7 +291,8 @@ static int raw_rcv_skb(struct sock * sk, struct sk_buff * skb)
 {
 	/* Charge it to the socket. */
 
-	if (ip_queue_rcv_skb(sk, skb) < 0) {
+	if (sock_queue_rcv_skb(sk, skb) < 0) {
+		atomic_inc(&sk->sk_drops);
 		kfree_skb(skb);
 		return NET_RX_DROP;
 	}
@@ -315,7 +316,7 @@ int raw_rcv(struct sock *sk, struct sk_buff *skb)
 }
 
 static int raw_send_hdrinc(struct sock *sk, void *from, size_t length,
-			struct rtable **rtp,
+			struct rtable *rt,
 			unsigned int flags)
 {
 	struct inet_sock *inet = inet_sk(sk);
@@ -324,27 +325,25 @@ static int raw_send_hdrinc(struct sock *sk, void *from, size_t length,
 	struct sk_buff *skb;
 	unsigned int iphlen;
 	int err;
-	struct rtable *rt = *rtp;
 
-	if (length > rt->dst.dev->mtu) {
-		ip_local_error(sk, EMSGSIZE, rt->rt_dst, inet->inet_dport,
-			       rt->dst.dev->mtu);
+	if (length > rt->u.dst.dev->mtu) {
+		ip_local_error(sk, EMSGSIZE, rt->rt_dst, inet->dport,
+			       rt->u.dst.dev->mtu);
 		return -EMSGSIZE;
 	}
 	if (flags&MSG_PROBE)
 		goto out;
 
 	skb = sock_alloc_send_skb(sk,
-				  length + LL_ALLOCATED_SPACE(rt->dst.dev) + 15,
+				  length + LL_ALLOCATED_SPACE(rt->u.dst.dev) + 15,
 				  flags & MSG_DONTWAIT, &err);
 	if (skb == NULL)
 		goto error;
-	skb_reserve(skb, LL_RESERVED_SPACE(rt->dst.dev));
+	skb_reserve(skb, LL_RESERVED_SPACE(rt->u.dst.dev));
 
 	skb->priority = sk->sk_priority;
 	skb->mark = sk->sk_mark;
-	skb_dst_set(skb, &rt->dst);
-	*rtp = NULL;
+	skb->dst = dst_clone(&rt->u.dst);
 
 	skb_reset_network_header(skb);
 	iph = ip_hdr(skb);
@@ -353,30 +352,19 @@ static int raw_send_hdrinc(struct sock *sk, void *from, size_t length,
 	skb->ip_summed = CHECKSUM_NONE;
 
 	skb->transport_header = skb->network_header;
-	err = -EFAULT;
-	if (memcpy_fromiovecend((void *)iph, from, 0, length))
-		goto error_free;
+	err = memcpy_fromiovecend((void *)iph, from, 0, length);
+	if (err)
+		goto error_fault;
 
+	/* We don't modify invalid header */
 	iphlen = iph->ihl * 4;
-
-	/*
-	 * We don't want to modify the ip header, but we do need to
-	 * be sure that it won't cause problems later along the network
-	 * stack.  Specifically we want to make sure that iph->ihl is a
-	 * sane value.  If ihl points beyond the length of the buffer passed
-	 * in, reject the frame as invalid
-	 */
-	err = -EINVAL;
-	if (iphlen > length)
-		goto error_free;
-
-	if (iphlen >= sizeof(*iph)) {
+	if (iphlen >= sizeof(*iph) && iphlen <= length) {
 		if (!iph->saddr)
 			iph->saddr = rt->rt_src;
 		iph->check   = 0;
 		iph->tot_len = htons(length);
 		if (!iph->id)
-			ip_select_ident(iph, &rt->dst, NULL);
+			ip_select_ident(iph, &rt->u.dst, NULL);
 
 		iph->check = ip_fast_csum((unsigned char *)iph, iph->ihl);
 	}
@@ -384,25 +372,24 @@ static int raw_send_hdrinc(struct sock *sk, void *from, size_t length,
 		icmp_out_count(net, ((struct icmphdr *)
 			skb_transport_header(skb))->type);
 
-	err = NF_HOOK(NFPROTO_IPV4, NF_INET_LOCAL_OUT, skb, NULL,
-		      rt->dst.dev, dst_output);
+	err = NF_HOOK(PF_INET, NF_INET_LOCAL_OUT, skb, NULL, rt->u.dst.dev,
+		      dst_output);
 	if (err > 0)
-		err = net_xmit_errno(err);
+		err = inet->recverr ? net_xmit_errno(err) : 0;
 	if (err)
 		goto error;
 out:
 	return 0;
 
-error_free:
+error_fault:
+	err = -EFAULT;
 	kfree_skb(skb);
 error:
 	IP_INC_STATS(net, IPSTATS_MIB_OUTDISCARDS);
-	if (err == -ENOBUFS && !inet->recverr)
-		err = 0;
 	return err;
 }
 
-static int raw_probe_proto_opt(struct flowi4 *fl4, struct msghdr *msg)
+static int raw_probe_proto_opt(struct flowi *fl, struct msghdr *msg)
 {
 	struct iovec *iov;
 	u8 __user *type = NULL;
@@ -418,7 +405,7 @@ static int raw_probe_proto_opt(struct flowi4 *fl4, struct msghdr *msg)
 		if (!iov)
 			continue;
 
-		switch (fl4->flowi4_proto) {
+		switch (fl->proto) {
 		case IPPROTO_ICMP:
 			/* check if one-byte field is readable or not. */
 			if (iov->iov_base && iov->iov_len < 1)
@@ -433,8 +420,8 @@ static int raw_probe_proto_opt(struct flowi4 *fl4, struct msghdr *msg)
 				code = iov->iov_base;
 
 			if (type && code) {
-				if (get_user(fl4->fl4_icmp_type, type) ||
-				    get_user(fl4->fl4_icmp_code, code))
+				if (get_user(fl->fl_icmp_type, type) ||
+				    get_user(fl->fl_icmp_code, code))
 					return -EFAULT;
 				probed = 1;
 			}
@@ -501,12 +488,12 @@ static int raw_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		err = -EDESTADDRREQ;
 		if (sk->sk_state != TCP_ESTABLISHED)
 			goto out;
-		daddr = inet->inet_daddr;
+		daddr = inet->daddr;
 	}
 
-	ipc.addr = inet->inet_saddr;
+	ipc.addr = inet->saddr;
 	ipc.opt = NULL;
-	ipc.tx_flags = 0;
+	ipc.shtx.flags = 0;
 	ipc.oif = sk->sk_bound_dev_if;
 
 	if (msg->msg_controllen) {
@@ -548,31 +535,26 @@ static int raw_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	}
 
 	{
-		struct flowi4 fl4 = {
-			.flowi4_oif = ipc.oif,
-			.flowi4_mark = sk->sk_mark,
-			.daddr = daddr,
-			.saddr = saddr,
-			.flowi4_tos = tos,
-			.flowi4_proto = (inet->hdrincl ?
-					 IPPROTO_RAW :
-					 sk->sk_protocol),
-			.flowi4_flags = FLOWI_FLAG_CAN_SLEEP,
-		};
+		struct flowi fl = { .oif = ipc.oif,
+				    .mark = sk->sk_mark,
+				    .nl_u = { .ip4_u =
+					      { .daddr = daddr,
+						.saddr = saddr,
+						.tos = tos } },
+				    .proto = inet->hdrincl ? IPPROTO_RAW :
+							     sk->sk_protocol,
+				  };
 		if (!inet->hdrincl) {
-			err = raw_probe_proto_opt(&fl4, msg);
+			err = raw_probe_proto_opt(&fl, msg);
 			if (err)
 				goto done;
 		}
 
-		security_sk_classify_flow(sk, flowi4_to_flowi(&fl4));
-		rt = ip_route_output_flow(sock_net(sk), &fl4, sk);
-		if (IS_ERR(rt)) {
-			err = PTR_ERR(rt);
-			rt = NULL;
-			goto done;
-		}
+		security_sk_classify_flow(sk, &fl);
+		err = ip_route_output_flow(sock_net(sk), &rt, &fl, sk, 1);
 	}
+	if (err)
+		goto done;
 
 	err = -EACCES;
 	if (rt->rt_flags & RTCF_BROADCAST && !sock_flag(sk, SOCK_BROADCAST))
@@ -584,7 +566,7 @@ back_from_confirm:
 
 	if (inet->hdrincl)
 		err = raw_send_hdrinc(sk, msg->msg_iov, len,
-					&rt, msg->msg_flags);
+					rt, msg->msg_flags);
 
 	 else {
 		if (!ipc.addr)
@@ -594,11 +576,8 @@ back_from_confirm:
 					&ipc, &rt, msg->msg_flags);
 		if (err)
 			ip_flush_pending_frames(sk);
-		else if (!(msg->msg_flags & MSG_MORE)) {
+		else if (!(msg->msg_flags & MSG_MORE))
 			err = ip_push_pending_frames(sk);
-			if (err == -ENOBUFS && !inet->recverr)
-				err = 0;
-		}
 		release_sock(sk);
 	}
 done:
@@ -612,7 +591,7 @@ out:
 	return len;
 
 do_confirm:
-	dst_confirm(&rt->dst);
+	dst_confirm(&rt->u.dst);
 	if (!(msg->msg_flags & MSG_PROBE) || len)
 		goto back_from_confirm;
 	err = 0;
@@ -622,7 +601,7 @@ do_confirm:
 static void raw_close(struct sock *sk, long timeout)
 {
 	/*
-	 * Raw sockets may have direct kernel references. Kill them.
+	 * Raw sockets may have direct kernel refereneces. Kill them.
 	 */
 	ip_ra_control(sk, 0, NULL);
 
@@ -651,9 +630,9 @@ static int raw_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	if (addr->sin_addr.s_addr && chk_addr_ret != RTN_LOCAL &&
 	    chk_addr_ret != RTN_MULTICAST && chk_addr_ret != RTN_BROADCAST)
 		goto out;
-	inet->inet_rcv_saddr = inet->inet_saddr = addr->sin_addr.s_addr;
+	inet->rcv_saddr = inet->saddr = addr->sin_addr.s_addr;
 	if (chk_addr_ret == RTN_MULTICAST || chk_addr_ret == RTN_BROADCAST)
-		inet->inet_saddr = 0;  /* Use device */
+		inet->saddr = 0;  /* Use device */
 	sk_dst_reset(sk);
 	ret = 0;
 out:	return ret;
@@ -698,7 +677,7 @@ static int raw_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	if (err)
 		goto done;
 
-	sock_recv_ts_and_drops(msg, sk, skb);
+	sock_recv_timestamp(msg, sk, skb);
 
 	/* Copy the address. */
 	if (sin) {
@@ -723,7 +702,7 @@ static int raw_init(struct sock *sk)
 {
 	struct raw_sock *rp = raw_sk(sk);
 
-	if (inet_sk(sk)->inet_num == IPPROTO_ICMP)
+	if (inet_sk(sk)->num == IPPROTO_ICMP)
 		memset(&rp->filter, 0, sizeof(rp->filter));
 	return 0;
 }
@@ -757,10 +736,10 @@ out:	return ret;
 }
 
 static int do_raw_setsockopt(struct sock *sk, int level, int optname,
-			  char __user *optval, unsigned int optlen)
+			  char __user *optval, int optlen)
 {
 	if (optname == ICMP_FILTER) {
-		if (inet_sk(sk)->inet_num != IPPROTO_ICMP)
+		if (inet_sk(sk)->num != IPPROTO_ICMP)
 			return -EOPNOTSUPP;
 		else
 			return raw_seticmpfilter(sk, optval, optlen);
@@ -769,7 +748,7 @@ static int do_raw_setsockopt(struct sock *sk, int level, int optname,
 }
 
 static int raw_setsockopt(struct sock *sk, int level, int optname,
-			  char __user *optval, unsigned int optlen)
+			  char __user *optval, int optlen)
 {
 	if (level != SOL_RAW)
 		return ip_setsockopt(sk, level, optname, optval, optlen);
@@ -778,7 +757,7 @@ static int raw_setsockopt(struct sock *sk, int level, int optname,
 
 #ifdef CONFIG_COMPAT
 static int compat_raw_setsockopt(struct sock *sk, int level, int optname,
-				 char __user *optval, unsigned int optlen)
+				 char __user *optval, int optlen)
 {
 	if (level != SOL_RAW)
 		return compat_ip_setsockopt(sk, level, optname, optval, optlen);
@@ -790,7 +769,7 @@ static int do_raw_getsockopt(struct sock *sk, int level, int optname,
 			  char __user *optval, int __user *optlen)
 {
 	if (optname == ICMP_FILTER) {
-		if (inet_sk(sk)->inet_num != IPPROTO_ICMP)
+		if (inet_sk(sk)->num != IPPROTO_ICMP)
 			return -EOPNOTSUPP;
 		else
 			return raw_geticmpfilter(sk, optval, optlen);
@@ -820,8 +799,7 @@ static int raw_ioctl(struct sock *sk, int cmd, unsigned long arg)
 {
 	switch (cmd) {
 		case SIOCOUTQ: {
-			int amount = sk_wmem_alloc_get(sk);
-
+			int amount = atomic_read(&sk->sk_wmem_alloc);
 			return put_user(amount, (int __user *)arg);
 		}
 		case SIOCINQ: {
@@ -845,23 +823,6 @@ static int raw_ioctl(struct sock *sk, int cmd, unsigned long arg)
 	}
 }
 
-#ifdef CONFIG_COMPAT
-static int compat_raw_ioctl(struct sock *sk, unsigned int cmd, unsigned long arg)
-{
-	switch (cmd) {
-	case SIOCOUTQ:
-	case SIOCINQ:
-		return -ENOIOCTLCMD;
-	default:
-#ifdef CONFIG_IP_MROUTE
-		return ipmr_compat_ioctl(sk, cmd, compat_ptr(arg));
-#else
-		return -ENOIOCTLCMD;
-#endif
-	}
-}
-#endif
-
 struct proto raw_prot = {
 	.name		   = "RAW",
 	.owner		   = THIS_MODULE,
@@ -884,7 +845,6 @@ struct proto raw_prot = {
 #ifdef CONFIG_COMPAT
 	.compat_setsockopt = compat_raw_setsockopt,
 	.compat_getsockopt = compat_raw_getsockopt,
-	.compat_ioctl	   = compat_raw_ioctl,
 #endif
 };
 
@@ -967,16 +927,16 @@ EXPORT_SYMBOL_GPL(raw_seq_stop);
 static void raw_sock_seq_show(struct seq_file *seq, struct sock *sp, int i)
 {
 	struct inet_sock *inet = inet_sk(sp);
-	__be32 dest = inet->inet_daddr,
-	       src = inet->inet_rcv_saddr;
+	__be32 dest = inet->daddr,
+	       src = inet->rcv_saddr;
 	__u16 destp = 0,
-	      srcp  = inet->inet_num;
+	      srcp  = inet->num;
 
 	seq_printf(seq, "%4d: %08X:%04X %08X:%04X"
 		" %02X %08X:%08X %02X:%08lX %08X %5d %8d %lu %d %p %d\n",
 		i, src, srcp, dest, destp, sp->sk_state,
-		sk_wmem_alloc_get(sp),
-		sk_rmem_alloc_get(sp),
+		atomic_read(&sp->sk_wmem_alloc),
+		atomic_read(&sp->sk_rmem_alloc),
 		0, 0L, 0, sock_i_uid(sp), 0, sock_i_ino(sp),
 		atomic_read(&sp->sk_refcnt), sp, atomic_read(&sp->sk_drops));
 }

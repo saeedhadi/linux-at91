@@ -2,9 +2,11 @@
 #define LINUX_HARDIRQ_H
 
 #include <linux/preempt.h>
+#include <linux/smp_lock.h>
 #include <linux/lockdep.h>
 #include <linux/ftrace_irq.h>
 #include <asm/hardirq.h>
+#include <asm/system.h>
 
 /*
  * We put the hardirq and softirq counter into the preemption
@@ -60,14 +62,6 @@
 #define HARDIRQ_OFFSET	(1UL << HARDIRQ_SHIFT)
 #define NMI_OFFSET	(1UL << NMI_SHIFT)
 
-#define SOFTIRQ_DISABLE_OFFSET	(2 * SOFTIRQ_OFFSET)
-
-#ifndef PREEMPT_ACTIVE
-#define PREEMPT_ACTIVE_BITS	1
-#define PREEMPT_ACTIVE_SHIFT	(NMI_SHIFT + NMI_BITS)
-#define PREEMPT_ACTIVE	(__IRQ_MASK(PREEMPT_ACTIVE_BITS) << PREEMPT_ACTIVE_SHIFT)
-#endif
-
 #if PREEMPT_ACTIVE < (1 << (NMI_SHIFT + NMI_BITS))
 #error PREEMPT_ACTIVE is too low!
 #endif
@@ -80,13 +74,10 @@
 /*
  * Are we doing bottom half or hardware interrupt processing?
  * Are we in a softirq context? Interrupt context?
- * in_softirq - Are we currently processing softirq or have bh disabled?
- * in_serving_softirq - Are we currently processing softirq?
  */
 #define in_irq()		(hardirq_count())
 #define in_softirq()		(softirq_count())
 #define in_interrupt()		(irq_count())
-#define in_serving_softirq()	(softirq_count() & SOFTIRQ_OFFSET)
 
 /*
  * Are we in NMI context?
@@ -94,8 +85,10 @@
 #define in_nmi()	(preempt_count() & NMI_MASK)
 
 #if defined(CONFIG_PREEMPT)
+# define PREEMPT_INATOMIC_BASE kernel_locked()
 # define PREEMPT_CHECK_OFFSET 1
 #else
+# define PREEMPT_INATOMIC_BASE 0
 # define PREEMPT_CHECK_OFFSET 0
 #endif
 
@@ -106,7 +99,7 @@
  * used in the general case to determine whether sleeping is possible.
  * Do not use in_atomic() in driver code.
  */
-#define in_atomic()	((preempt_count() & ~PREEMPT_ACTIVE) != 0)
+#define in_atomic()	((preempt_count() & ~PREEMPT_ACTIVE) != PREEMPT_INATOMIC_BASE)
 
 /*
  * Check whether we were atomic before we did preempt_disable():
@@ -131,49 +124,23 @@ extern void synchronize_irq(unsigned int irq);
 
 struct task_struct;
 
-#if !defined(CONFIG_VIRT_CPU_ACCOUNTING) && !defined(CONFIG_IRQ_TIME_ACCOUNTING)
+#ifndef CONFIG_VIRT_CPU_ACCOUNTING
 static inline void account_system_vtime(struct task_struct *tsk)
 {
 }
-#else
-extern void account_system_vtime(struct task_struct *tsk);
 #endif
 
-#if defined(CONFIG_NO_HZ)
-#if defined(CONFIG_TINY_RCU) || defined(CONFIG_TINY_PREEMPT_RCU)
-extern void rcu_enter_nohz(void);
-extern void rcu_exit_nohz(void);
-
-static inline void rcu_irq_enter(void)
-{
-	rcu_exit_nohz();
-}
-
-static inline void rcu_irq_exit(void)
-{
-	rcu_enter_nohz();
-}
-
-static inline void rcu_nmi_enter(void)
-{
-}
-
-static inline void rcu_nmi_exit(void)
-{
-}
-
-#else
+#if defined(CONFIG_NO_HZ) && !defined(CONFIG_CLASSIC_RCU)
 extern void rcu_irq_enter(void);
 extern void rcu_irq_exit(void);
 extern void rcu_nmi_enter(void);
 extern void rcu_nmi_exit(void);
-#endif
 #else
 # define rcu_irq_enter() do { } while (0)
 # define rcu_irq_exit() do { } while (0)
 # define rcu_nmi_enter() do { } while (0)
 # define rcu_nmi_exit() do { } while (0)
-#endif /* #if defined(CONFIG_NO_HZ) */
+#endif /* #if defined(CONFIG_NO_HZ) && !defined(CONFIG_CLASSIC_RCU) */
 
 /*
  * It is safe to do non-atomic ops on ->hardirq_context,

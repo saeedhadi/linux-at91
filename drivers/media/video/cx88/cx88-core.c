@@ -217,8 +217,8 @@ cx88_free_buffer(struct videobuf_queue *q, struct cx88_buffer *buf)
 	struct videobuf_dmabuf *dma=videobuf_to_dma(&buf->vb);
 
 	BUG_ON(in_interrupt());
-	videobuf_waiton(q, &buf->vb, 0, 0);
-	videobuf_dma_unmap(q->dev, dma);
+	videobuf_waiton(&buf->vb,0,0);
+	videobuf_dma_unmap(q, dma);
 	videobuf_dma_free(dma);
 	btcx_riscmem_free(to_pci_dev(q->dev), &buf->risc);
 	buf->vb.state = VIDEOBUF_NEEDS_INIT;
@@ -231,7 +231,7 @@ cx88_free_buffer(struct videobuf_queue *q, struct cx88_buffer *buf)
  * can use the whole SDRAM for the DMA fifos.  To simplify things, we
  * use a static memory layout.  That surely will waste memory in case
  * we don't use all DMA channels at the same time (which will be the
- * case most of the time).  But that still gives us enough FIFO space
+ * case most of the time).  But that still gives us enougth FIFO space
  * to be able to deal with insane long pci latencies ...
  *
  * FIFO space allocations:
@@ -241,7 +241,6 @@ cx88_free_buffer(struct videobuf_queue *q, struct cx88_buffer *buf)
  *    channel  24    (vbi)      -  4.0k
  *    channels 25+26 (audio)    -  4.0k
  *    channel  28    (mpeg)     -  4.0k
- *    channel  27    (audio rds)-  3.0k
  *    TOTAL                     = 29.0k
  *
  * Every channel has 160 bytes control data (64 bytes instruction
@@ -253,7 +252,7 @@ cx88_free_buffer(struct videobuf_queue *q, struct cx88_buffer *buf)
  *    0x0c00 -           FIFOs
  */
 
-const struct sram_channel const cx88_sram_channels[] = {
+struct sram_channel cx88_sram_channels[] = {
 	[SRAM_CH21] = {
 		.name       = "video y / packed",
 		.cmds_start = 0x180040,
@@ -338,22 +337,10 @@ const struct sram_channel const cx88_sram_channels[] = {
 		.cnt1_reg   = MO_DMA28_CNT1,
 		.cnt2_reg   = MO_DMA28_CNT2,
 	},
-	[SRAM_CH27] = {
-		.name       = "audio rds",
-		.cmds_start = 0x1801C0,
-		.ctrl_start = 0x180860,
-		.cdt        = 0x180860 + 64,
-		.fifo_start = 0x187400,
-		.fifo_size  = 0x000C00,
-		.ptr1_reg   = MO_DMA27_PTR1,
-		.ptr2_reg   = MO_DMA27_PTR2,
-		.cnt1_reg   = MO_DMA27_CNT1,
-		.cnt2_reg   = MO_DMA27_CNT2,
-	},
 };
 
 int cx88_sram_channel_setup(struct cx88_core *core,
-			    const struct sram_channel *ch,
+			    struct sram_channel *ch,
 			    unsigned int bpl, u32 risc)
 {
 	unsigned int i,lines;
@@ -394,7 +381,7 @@ int cx88_sram_channel_setup(struct cx88_core *core,
 
 static int cx88_risc_decode(u32 risc)
 {
-	static const char * const instr[16] = {
+	static char *instr[16] = {
 		[ RISC_SYNC    >> 28 ] = "sync",
 		[ RISC_WRITE   >> 28 ] = "write",
 		[ RISC_WRITEC  >> 28 ] = "writec",
@@ -406,14 +393,14 @@ static int cx88_risc_decode(u32 risc)
 		[ RISC_WRITECM >> 28 ] = "writecm",
 		[ RISC_WRITECR >> 28 ] = "writecr",
 	};
-	static int const incr[16] = {
+	static int incr[16] = {
 		[ RISC_WRITE   >> 28 ] = 2,
 		[ RISC_JUMP    >> 28 ] = 2,
 		[ RISC_WRITERM >> 28 ] = 3,
 		[ RISC_WRITECM >> 28 ] = 3,
 		[ RISC_WRITECR >> 28 ] = 4,
 	};
-	static const char * const bits[] = {
+	static char *bits[] = {
 		"12",   "13",   "14",   "resync",
 		"cnt0", "cnt1", "18",   "19",
 		"20",   "21",   "22",   "23",
@@ -432,9 +419,9 @@ static int cx88_risc_decode(u32 risc)
 
 
 void cx88_sram_channel_dump(struct cx88_core *core,
-			    const struct sram_channel *ch)
+			    struct sram_channel *ch)
 {
-	static const char * const name[] = {
+	static char *name[] = {
 		"initial risc",
 		"cdt base",
 		"cdt size",
@@ -489,14 +476,14 @@ void cx88_sram_channel_dump(struct cx88_core *core,
 	       core->name,cx_read(ch->cnt2_reg));
 }
 
-static const char *cx88_pci_irqs[32] = {
+static char *cx88_pci_irqs[32] = {
 	"vid", "aud", "ts", "vip", "hst", "5", "6", "tm1",
 	"src_dma", "dst_dma", "risc_rd_err", "risc_wr_err",
 	"brdg_err", "src_dma_err", "dst_dma_err", "ipb_dma_err",
 	"i2c", "i2c_rack", "ir_smp", "gpio0", "gpio1"
 };
 
-void cx88_print_irqbits(const char *name, const char *tag, const char *strings[],
+void cx88_print_irqbits(char *name, char *tag, char **strings,
 			int len, u32 bits, u32 mask)
 {
 	unsigned int i;
@@ -611,7 +598,6 @@ int cx88_reset(struct cx88_core *core)
 	cx88_sram_channel_setup(core, &cx88_sram_channels[SRAM_CH25], 128, 0);
 	cx88_sram_channel_setup(core, &cx88_sram_channels[SRAM_CH26], 128, 0);
 	cx88_sram_channel_setup(core, &cx88_sram_channels[SRAM_CH28], 188*4, 0);
-	cx88_sram_channel_setup(core, &cx88_sram_channels[SRAM_CH27], 128, 0);
 
 	/* misc init ... */
 	cx_write(MO_INPUT_FORMAT, ((1 << 13) |   // agc enable
@@ -624,7 +610,7 @@ int cx88_reset(struct cx88_core *core)
 	/* setup image format */
 	cx_andor(MO_COLOR_CTRL, 0x4000, 0x4000);
 
-	/* setup FIFO Thresholds */
+	/* setup FIFO Threshholds */
 	cx_write(MO_PDMA_STHRSH,   0x0807);
 	cx_write(MO_PDMA_DTHRSH,   0x0807);
 
@@ -770,7 +756,7 @@ static const u32 xtal = 28636363;
 
 static int set_pll(struct cx88_core *core, int prescale, u32 ofreq)
 {
-	static const u32 pre[] = { 0, 0, 0, 3, 2, 1 };
+	static u32 pre[] = { 0, 0, 0, 3, 2, 1 };
 	u64 pll;
 	u32 reg;
 	int i;
@@ -810,8 +796,6 @@ int cx88_start_audio_dma(struct cx88_core *core)
 	/* constant 128 made buzz in analog Nicam-stereo for bigger fifo_size */
 	int bpl = cx88_sram_channels[SRAM_CH25].fifo_size/4;
 
-	int rds_bpl = cx88_sram_channels[SRAM_CH27].fifo_size/AUD_RDS_LINES;
-
 	/* If downstream RISC is enabled, bail out; ALSA is managing DMA */
 	if (cx_read(MO_AUD_DMACNTRL) & 0x10)
 		return 0;
@@ -819,14 +803,12 @@ int cx88_start_audio_dma(struct cx88_core *core)
 	/* setup fifo + format */
 	cx88_sram_channel_setup(core, &cx88_sram_channels[SRAM_CH25], bpl, 0);
 	cx88_sram_channel_setup(core, &cx88_sram_channels[SRAM_CH26], bpl, 0);
-	cx88_sram_channel_setup(core, &cx88_sram_channels[SRAM_CH27],
-				rds_bpl, 0);
 
 	cx_write(MO_AUDD_LNGTH, bpl); /* fifo bpl size */
-	cx_write(MO_AUDR_LNGTH, rds_bpl); /* fifo bpl size */
+	cx_write(MO_AUDR_LNGTH, bpl); /* fifo bpl size */
 
-	/* enable Up, Down and Audio RDS fifo */
-	cx_write(MO_AUD_DMACNTRL, 0x0007);
+	/* start dma */
+	cx_write(MO_AUD_DMACNTRL, 0x0003); /* Up and Down fifo enable */
 
 	return 0;
 }
@@ -847,8 +829,7 @@ static int set_tvaudio(struct cx88_core *core)
 {
 	v4l2_std_id norm = core->tvnorm;
 
-	if (CX88_VMUX_TELEVISION != INPUT(core->input).type &&
-	    CX88_VMUX_CABLE != INPUT(core->input).type)
+	if (CX88_VMUX_TELEVISION != INPUT(core->input).type)
 		return 0;
 
 	if (V4L2_STD_PAL_BG & norm) {
@@ -879,7 +860,7 @@ static int set_tvaudio(struct cx88_core *core)
 	} else {
 		printk("%s/0: tvaudio support needs work for this tv norm [%s], sorry\n",
 		       core->name, v4l2_norm_to_name(core->tvnorm));
-		core->tvaudio = WW_NONE;
+		core->tvaudio = 0;
 		return 0;
 	}
 
@@ -1020,15 +1001,16 @@ int cx88_set_tvnorm(struct cx88_core *core, v4l2_std_id norm)
 
 struct video_device *cx88_vdev_init(struct cx88_core *core,
 				    struct pci_dev *pci,
-				    const struct video_device *template_,
-				    const char *type)
+				    struct video_device *template,
+				    char *type)
 {
 	struct video_device *vfd;
 
 	vfd = video_device_alloc();
 	if (NULL == vfd)
 		return NULL;
-	*vfd = *template_;
+	*vfd = *template;
+	vfd->minor   = -1;
 	vfd->v4l2_dev = &core->v4l2_dev;
 	vfd->parent = &pci->dev;
 	vfd->release = video_device_release;

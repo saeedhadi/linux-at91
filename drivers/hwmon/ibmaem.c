@@ -20,8 +20,6 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/ipmi.h>
 #include <linux/module.h>
 #include <linux/hwmon.h>
@@ -31,7 +29,6 @@
 #include <linux/kdev_t.h>
 #include <linux/spinlock.h>
 #include <linux/idr.h>
-#include <linux/slab.h>
 #include <linux/sched.h>
 #include <linux/platform_device.h>
 #include <linux/math64.h>
@@ -1092,7 +1089,7 @@ static int __init aem_init(void)
 
 	res = driver_register(&aem_driver.driver);
 	if (res) {
-		pr_err("Can't register aem driver\n");
+		printk(KERN_ERR "Can't register aem driver\n");
 		return res;
 	}
 
@@ -1130,4 +1127,3 @@ MODULE_ALIAS("dmi:bvnIBM:*:pnIBMSystemx3650-*");
 MODULE_ALIAS("dmi:bvnIBM:*:pnIBMSystemx3655-*");
 MODULE_ALIAS("dmi:bvnIBM:*:pnIBMSystemx3755-*");
 MODULE_ALIAS("dmi:bvnIBM:*:pnIBM3850M2/x3950M2-*");
-MODULE_ALIAS("dmi:bvnIBM:*:pnIBMBladeHC10-*");

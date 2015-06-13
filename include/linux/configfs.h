@@ -27,8 +27,8 @@
  *
  * configfs Copyright (C) 2005 Oracle.  All rights reserved.
  *
- * Please read Documentation/filesystems/configfs/configfs.txt before using
- * the configfs interface, ESPECIALLY the parts about reference counts and
+ * Please read Documentation/filesystems/configfs.txt before using the
+ * configfs interface, ESPECIALLY the parts about reference counts and
  * item destructors.
  */
 
@@ -218,7 +218,7 @@ static ssize_t _item##_attr_store(struct config_item *item,		\
  * group children.  default_groups may coexist alongsize make_group() or
  * make_item(), but if the group wishes to have only default_groups
  * children (disallowing mkdir(2)), it need not provide either function.
- * If the group has commit(), it supports pending and committed (active)
+ * If the group has commit(), it supports pending and commited (active)
  * items.
  */
 struct configfs_item_operations {

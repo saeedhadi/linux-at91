@@ -28,7 +28,6 @@
 #include <linux/regulator/bq24022.h>
 #include <linux/regulator/machine.h>
 #include <linux/usb/gpio_vbus.h>
-#include <linux/i2c/pxa-i2c.h>
 
 #include <mach/hardware.h>
 #include <asm/mach-types.h>
@@ -37,6 +36,7 @@
 #include <mach/pxa27x.h>
 #include <mach/magician.h>
 #include <mach/pxafb.h>
+#include <mach/i2c.h>
 #include <mach/mmc.h>
 #include <mach/irda.h>
 #include <mach/ohci.h>
@@ -88,7 +88,26 @@ static unsigned long magician_pin_config[] __initdata = {
 	GPIO112_MMC_CMD,
 
 	/* LCD */
-	GPIOxx_LCD_TFT_16BPP,
+	GPIO58_LCD_LDD_0,
+	GPIO59_LCD_LDD_1,
+	GPIO60_LCD_LDD_2,
+	GPIO61_LCD_LDD_3,
+	GPIO62_LCD_LDD_4,
+	GPIO63_LCD_LDD_5,
+	GPIO64_LCD_LDD_6,
+	GPIO65_LCD_LDD_7,
+	GPIO66_LCD_LDD_8,
+	GPIO67_LCD_LDD_9,
+	GPIO68_LCD_LDD_10,
+	GPIO69_LCD_LDD_11,
+	GPIO70_LCD_LDD_12,
+	GPIO71_LCD_LDD_13,
+	GPIO72_LCD_LDD_14,
+	GPIO73_LCD_LDD_15,
+	GPIO74_LCD_FCLK,
+	GPIO75_LCD_LCLK,
+	GPIO76_LCD_PCLK,
+	GPIO77_LCD_BIAS,
 
 	/* QCI */
 	GPIO12_CIF_DD_7,
@@ -121,9 +140,15 @@ static unsigned long magician_pin_config[] __initdata = {
  * IRDA
  */
 
+static void magician_irda_transceiver_mode(struct device *dev, int mode)
+{
+	gpio_set_value(GPIO83_MAGICIAN_nIR_EN, mode & IR_OFF);
+	pxa2xx_transceiver_mode(dev, mode);
+}
+
 static struct pxaficp_platform_data magician_ficp_info = {
-	.gpio_pwdown		= GPIO83_MAGICIAN_nIR_EN,
-	.transceiver_cap	= IR_SIRMODE | IR_OFF,
+	.transceiver_cap  = IR_SIRMODE | IR_OFF,
+	.transceiver_mode = magician_irda_transceiver_mode,
 };
 
 /*
@@ -362,7 +387,7 @@ err:
 	return ret;
 }
 
-static int magician_backlight_notify(struct device *dev, int brightness)
+static int magician_backlight_notify(int brightness)
 {
 	gpio_set_value(EGPIO_MAGICIAN_BL_POWER, brightness);
 	if (brightness >= 200) {
@@ -599,7 +624,7 @@ static struct regulator_consumer_supply bq24022_consumers[] = {
 static struct regulator_init_data bq24022_init_data = {
 	.constraints = {
 		.max_uA         = 500000,
-		.valid_ops_mask = REGULATOR_CHANGE_CURRENT | REGULATOR_CHANGE_STATUS,
+		.valid_ops_mask = REGULATOR_CHANGE_CURRENT,
 	},
 	.num_consumer_supplies  = ARRAY_SIZE(bq24022_consumers),
 	.consumer_supplies      = bq24022_consumers,
@@ -626,24 +651,55 @@ static struct platform_device bq24022 = {
 static int magician_mci_init(struct device *dev,
 				irq_handler_t detect_irq, void *data)
 {
-	return request_irq(IRQ_MAGICIAN_SD, detect_irq,
+	int err;
+
+	err = request_irq(IRQ_MAGICIAN_SD, detect_irq,
 				IRQF_DISABLED | IRQF_SAMPLE_RANDOM,
-				"mmc card detect", data);
+				"MMC card detect", data);
+	if (err)
+		goto err_request_irq;
+	err = gpio_request(EGPIO_MAGICIAN_SD_POWER, "SD_POWER");
+	if (err)
+		goto err_request_power;
+	err = gpio_request(EGPIO_MAGICIAN_nSD_READONLY, "nSD_READONLY");
+	if (err)
+		goto err_request_readonly;
+
+	return 0;
+
+err_request_readonly:
+	gpio_free(EGPIO_MAGICIAN_SD_POWER);
+err_request_power:
+	free_irq(IRQ_MAGICIAN_SD, data);
+err_request_irq:
+	return err;
+}
+
+static void magician_mci_setpower(struct device *dev, unsigned int vdd)
+{
+	struct pxamci_platform_data *pdata = dev->platform_data;
+
+	gpio_set_value(EGPIO_MAGICIAN_SD_POWER, (1 << vdd) & pdata->ocr_mask);
+}
+
+static int magician_mci_get_ro(struct device *dev)
+{
+	return (!gpio_get_value(EGPIO_MAGICIAN_nSD_READONLY));
 }
 
 static void magician_mci_exit(struct device *dev, void *data)
 {
+	gpio_free(EGPIO_MAGICIAN_nSD_READONLY);
+	gpio_free(EGPIO_MAGICIAN_SD_POWER);
 	free_irq(IRQ_MAGICIAN_SD, data);
 }
 
 static struct pxamci_platform_data magician_mci_info = {
-	.ocr_mask 		= MMC_VDD_32_33|MMC_VDD_33_34,
-	.init     		= magician_mci_init,
-	.exit     		= magician_mci_exit,
-	.gpio_card_detect	= -1,
-	.gpio_card_ro		= EGPIO_MAGICIAN_nSD_READONLY,
-	.gpio_card_ro_invert	= 1,
-	.gpio_power		= EGPIO_MAGICIAN_SD_POWER,
+	.ocr_mask = MMC_VDD_32_33|MMC_VDD_33_34,
+	.init     = magician_mci_init,
+	.get_ro   = magician_mci_get_ro,
+	.setpower = magician_mci_setpower,
+	.exit     = magician_mci_exit,
 };
 
 
@@ -689,14 +745,6 @@ static struct platform_device strataflash = {
 };
 
 /*
- * I2C
- */
-
-static struct i2c_pxa_platform_data i2c_info = {
-	.fast_mode = 1,
-};
-
-/*
  * Platform devices
  */
 
@@ -723,11 +771,7 @@ static void __init magician_init(void)
 
 	pxa2xx_mfp_config(ARRAY_AND_SIZE(magician_pin_config));
 
-	pxa_set_ffuart_info(NULL);
-	pxa_set_btuart_info(NULL);
-	pxa_set_stuart_info(NULL);
-
-	platform_add_devices(ARRAY_AND_SIZE(devices));
+	platform_add_devices(devices, ARRAY_SIZE(devices));
 
 	err = gpio_request(GPIO83_MAGICIAN_nIR_EN, "nIR_EN");
 	if (!err) {
@@ -735,7 +779,7 @@ static void __init magician_init(void)
 		pxa_set_ficp_info(&magician_ficp_info);
 	}
 	pxa27x_set_i2c_power_info(NULL);
-	pxa_set_i2c_info(&i2c_info);
+	pxa_set_i2c_info(NULL);
 	pxa_set_mci_info(&magician_mci_info);
 	pxa_set_ohci_info(&magician_ohci_info);
 
@@ -757,16 +801,17 @@ static void __init magician_init(void)
 		gpio_direction_output(GPIO104_MAGICIAN_LCD_POWER_1, 0);
 		gpio_direction_output(GPIO105_MAGICIAN_LCD_POWER_2, 0);
 		gpio_direction_output(GPIO106_MAGICIAN_LCD_POWER_3, 0);
-		pxa_set_fb_info(NULL, lcd_select ? &samsung_info : &toppoly_info);
+		set_pxa_fb_info(lcd_select ? &samsung_info : &toppoly_info);
 	} else
 		pr_err("LCD detection: CPLD mapping failed\n");
 }
 
 
 MACHINE_START(MAGICIAN, "HTC Magician")
+	.phys_io = 0x40000000,
+	.io_pg_offst = (io_p2v(0x40000000) >> 18) & 0xfffc,
 	.boot_params = 0xa0000100,
-	.map_io = pxa27x_map_io,
-	.nr_irqs = MAGICIAN_NR_IRQS,
+	.map_io = pxa_map_io,
 	.init_irq = pxa27x_init_irq,
 	.init_machine = magician_init,
 	.timer = &pxa_timer,

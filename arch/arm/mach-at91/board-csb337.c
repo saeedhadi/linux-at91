@@ -50,6 +50,7 @@ static void __init csb337_map_io(void)
 
 	/* Setup the LEDs */
 	at91_init_leds(AT91_PIN_PB0, AT91_PIN_PB1);
+	at91_set_gpio_output(AT91_PIN_PB2, 1);		/* third (unused) LED */
 
 	/* DBGU on ttyS0 */
 	at91_register_uart(0, 0, 0);
@@ -257,6 +258,8 @@ static void __init csb337_board_init(void)
 
 MACHINE_START(CSB337, "Cogent CSB337")
 	/* Maintainer: Bill Gatliff */
+	.phys_io	= AT91_BASE_SYS,
+	.io_pg_offst	= (AT91_VA_BASE_SYS >> 18) & 0xfffc,
 	.boot_params	= AT91_SDRAM_BASE + 0x100,
 	.timer		= &at91rm9200_timer,
 	.map_io		= csb337_map_io,

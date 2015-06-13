@@ -8,42 +8,43 @@
 #include <linux/module.h>
 #include <linux/pm.h>
 #include <linux/clockchips.h>
-#include <linux/random.h>
-#include <linux/user-return-notifier.h>
-#include <linux/dmi.h>
-#include <linux/utsname.h>
-#include <trace/events/power.h>
-#include <linux/hw_breakpoint.h>
-#include <asm/cpu.h>
+#include <trace/power.h>
 #include <asm/system.h>
 #include <asm/apic.h>
-#include <asm/syscalls.h>
 #include <asm/idle.h>
 #include <asm/uaccess.h>
 #include <asm/i387.h>
-#include <asm/debugreg.h>
+
+unsigned long idle_halt;
+EXPORT_SYMBOL(idle_halt);
+unsigned long idle_nomwait;
+EXPORT_SYMBOL(idle_nomwait);
 
 struct kmem_cache *task_xstate_cachep;
-EXPORT_SYMBOL_GPL(task_xstate_cachep);
+
+DEFINE_TRACE(power_start);
+DEFINE_TRACE(power_end);
 
 int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 {
-	int ret;
-
 	*dst = *src;
-	if (fpu_allocated(&src->thread.fpu)) {
-		memset(&dst->thread.fpu, 0, sizeof(dst->thread.fpu));
-		ret = fpu_alloc(&dst->thread.fpu);
-		if (ret)
-			return ret;
-		fpu_copy(&dst->thread.fpu, &src->thread.fpu);
+	if (src->thread.xstate) {
+		dst->thread.xstate = kmem_cache_alloc(task_xstate_cachep,
+						      GFP_KERNEL);
+		if (!dst->thread.xstate)
+			return -ENOMEM;
+		WARN_ON((unsigned long)dst->thread.xstate & 15);
+		memcpy(dst->thread.xstate, src->thread.xstate, xstate_size);
 	}
 	return 0;
 }
 
 void free_thread_xstate(struct task_struct *tsk)
 {
-	fpu_free(&tsk->thread.fpu);
+	if (tsk->thread.xstate) {
+		kmem_cache_free(task_xstate_cachep, tsk->thread.xstate);
+		tsk->thread.xstate = NULL;
+	}
 }
 
 void free_thread_info(struct thread_info *ti)
@@ -57,7 +58,7 @@ void arch_task_cache_init(void)
         task_xstate_cachep =
         	kmem_cache_create("task_xstate", xstate_size,
 				  __alignof__(union thread_xstate),
-				  SLAB_PANIC | SLAB_NOTRACK, NULL);
+				  SLAB_PANIC, NULL);
 }
 
 /*
@@ -82,45 +83,34 @@ void exit_thread(void)
 		put_cpu();
 		kfree(bp);
 	}
-}
 
-void show_regs(struct pt_regs *regs)
-{
-	show_registers(regs);
-	show_trace(NULL, regs, (unsigned long *)kernel_stack_pointer(regs), 0);
-}
-
-void show_regs_common(void)
-{
-	const char *vendor, *product, *board;
-
-	vendor = dmi_get_system_info(DMI_SYS_VENDOR);
-	if (!vendor)
-		vendor = "";
-	product = dmi_get_system_info(DMI_PRODUCT_NAME);
-	if (!product)
-		product = "";
-
-	/* Board Name is optional */
-	board = dmi_get_system_info(DMI_BOARD_NAME);
-
-	printk(KERN_CONT "\n");
-	printk(KERN_DEFAULT "Pid: %d, comm: %.20s %s %s %.*s",
-		current->pid, current->comm, print_tainted(),
-		init_utsname()->release,
-		(int)strcspn(init_utsname()->version, " "),
-		init_utsname()->version);
-	printk(KERN_CONT " %s %s", vendor, product);
-	if (board)
-		printk(KERN_CONT "/%s", board);
-	printk(KERN_CONT "\n");
+	ds_exit_thread(current);
 }
 
 void flush_thread(void)
 {
 	struct task_struct *tsk = current;
 
-	flush_ptrace_hw_breakpoint(tsk);
+#ifdef CONFIG_X86_64
+	if (test_tsk_thread_flag(tsk, TIF_ABI_PENDING)) {
+		clear_tsk_thread_flag(tsk, TIF_ABI_PENDING);
+		if (test_tsk_thread_flag(tsk, TIF_IA32)) {
+			clear_tsk_thread_flag(tsk, TIF_IA32);
+		} else {
+			set_tsk_thread_flag(tsk, TIF_IA32);
+			current_thread_info()->status |= TS_COMPAT;
+		}
+	}
+#endif
+
+	clear_tsk_thread_flag(tsk, TIF_DEBUG);
+
+	tsk->thread.debugreg0 = 0;
+	tsk->thread.debugreg1 = 0;
+	tsk->thread.debugreg2 = 0;
+	tsk->thread.debugreg3 = 0;
+	tsk->thread.debugreg6 = 0;
+	tsk->thread.debugreg7 = 0;
 	memset(tsk->thread.tls_array, 0, sizeof(tsk->thread.tls_array));
 	/*
 	 * Forget coprocessor state..
@@ -196,15 +186,20 @@ void __switch_to_xtra(struct task_struct *prev_p, struct task_struct *next_p,
 	prev = &prev_p->thread;
 	next = &next_p->thread;
 
-	if (test_tsk_thread_flag(prev_p, TIF_BLOCKSTEP) ^
-	    test_tsk_thread_flag(next_p, TIF_BLOCKSTEP)) {
-		unsigned long debugctl = get_debugctlmsr();
+	if (test_tsk_thread_flag(next_p, TIF_DS_AREA_MSR) ||
+	    test_tsk_thread_flag(prev_p, TIF_DS_AREA_MSR))
+		ds_switch_to(prev_p, next_p);
+	else if (next->debugctlmsr != prev->debugctlmsr)
+		update_debugctlmsr(next->debugctlmsr);
 
-		debugctl &= ~DEBUGCTLMSR_BTF;
-		if (test_tsk_thread_flag(next_p, TIF_BLOCKSTEP))
-			debugctl |= DEBUGCTLMSR_BTF;
-
-		update_debugctlmsr(debugctl);
+	if (test_tsk_thread_flag(next_p, TIF_DEBUG)) {
+		set_debugreg(next->debugreg0, 0);
+		set_debugreg(next->debugreg1, 1);
+		set_debugreg(next->debugreg2, 2);
+		set_debugreg(next->debugreg3, 3);
+		/* no 4 and 5 */
+		set_debugreg(next->debugreg6, 6);
+		set_debugreg(next->debugreg7, 7);
 	}
 
 	if (test_tsk_thread_flag(prev_p, TIF_NOTSC) ^
@@ -229,7 +224,6 @@ void __switch_to_xtra(struct task_struct *prev_p, struct task_struct *next_p,
 		 */
 		memset(tss->io_bitmap, 0xff, prev->io_bitmap_max);
 	}
-	propagate_user_return_notify(prev_p, next_p);
 }
 
 int sys_fork(struct pt_regs *regs)
@@ -253,84 +247,11 @@ int sys_vfork(struct pt_regs *regs)
 		       NULL, NULL);
 }
 
-long
-sys_clone(unsigned long clone_flags, unsigned long newsp,
-	  void __user *parent_tid, void __user *child_tid, struct pt_regs *regs)
-{
-	if (!newsp)
-		newsp = regs->sp;
-	return do_fork(clone_flags, newsp, regs, 0, parent_tid, child_tid);
-}
-
-/*
- * This gets run with %si containing the
- * function to call, and %di containing
- * the "args".
- */
-extern void kernel_thread_helper(void);
-
-/*
- * Create a kernel thread
- */
-int kernel_thread(int (*fn)(void *), void *arg, unsigned long flags)
-{
-	struct pt_regs regs;
-
-	memset(&regs, 0, sizeof(regs));
-
-	regs.si = (unsigned long) fn;
-	regs.di = (unsigned long) arg;
-
-#ifdef CONFIG_X86_32
-	regs.ds = __USER_DS;
-	regs.es = __USER_DS;
-	regs.fs = __KERNEL_PERCPU;
-	regs.gs = __KERNEL_STACK_CANARY;
-#else
-	regs.ss = __KERNEL_DS;
-#endif
-
-	regs.orig_ax = -1;
-	regs.ip = (unsigned long) kernel_thread_helper;
-	regs.cs = __KERNEL_CS | get_kernel_rpl();
-	regs.flags = X86_EFLAGS_IF | 0x2;
-
-	/* Ok, create the new process.. */
-	return do_fork(flags | CLONE_VM | CLONE_UNTRACED, 0, &regs, 0, NULL, NULL);
-}
-EXPORT_SYMBOL(kernel_thread);
-
-/*
- * sys_execve() executes a new program.
- */
-long sys_execve(const char __user *name,
-		const char __user *const __user *argv,
-		const char __user *const __user *envp, struct pt_regs *regs)
-{
-	long error;
-	char *filename;
-
-	filename = getname(name);
-	error = PTR_ERR(filename);
-	if (IS_ERR(filename))
-		return error;
-	error = do_execve(filename, argv, envp, regs);
-
-#ifdef CONFIG_X86_32
-	if (error == 0) {
-		/* Make sure we don't return using sysenter.. */
-                set_thread_flag(TIF_IRET);
-        }
-#endif
-
-	putname(filename);
-	return error;
-}
 
 /*
  * Idle related variables and functions
  */
-unsigned long boot_option_idle_override = IDLE_NO_OVERRIDE;
+unsigned long boot_option_idle_override = 0;
 EXPORT_SYMBOL(boot_option_idle_override);
 
 /*
@@ -375,8 +296,9 @@ static inline int hlt_use_halt(void)
 void default_idle(void)
 {
 	if (hlt_use_halt()) {
-		trace_power_start(POWER_CSTATE, 1, smp_processor_id());
-		trace_cpu_idle(1, smp_processor_id());
+		struct power_trace it;
+
+		trace_power_start(&it, POWER_CSTATE, 1);
 		current_thread_info()->status &= ~TS_POLLING;
 		/*
 		 * TS_POLLING-cleared state must be visible before we
@@ -389,8 +311,7 @@ void default_idle(void)
 		else
 			local_irq_enable();
 		current_thread_info()->status |= TS_POLLING;
-		trace_power_end(smp_processor_id());
-		trace_cpu_idle(PWR_EVENT_EXIT, smp_processor_id());
+		trace_power_end(&it);
 	} else {
 		local_irq_enable();
 		/* loop is done by the caller */
@@ -448,8 +369,11 @@ EXPORT_SYMBOL_GPL(cpu_idle_wait);
  */
 void mwait_idle_with_hints(unsigned long ax, unsigned long cx)
 {
+	struct power_trace it;
+
+	trace_power_start(&it, POWER_CSTATE, (ax>>4)+1);
 	if (!need_resched()) {
-		if (cpu_has(__this_cpu_ptr(&cpu_info), X86_FEATURE_CLFLUSH_MONITOR))
+		if (cpu_has(&current_cpu_data, X86_FEATURE_CLFLUSH_MONITOR))
 			clflush((void *)&current_thread_info()->flags);
 
 		__monitor((void *)&current_thread_info()->flags, 0, 0);
@@ -457,15 +381,16 @@ void mwait_idle_with_hints(unsigned long ax, unsigned long cx)
 		if (!need_resched())
 			__mwait(ax, cx);
 	}
+	trace_power_end(&it);
 }
 
 /* Default MONITOR/MWAIT with no hints, used for default C1 state */
 static void mwait_idle(void)
 {
+	struct power_trace it;
 	if (!need_resched()) {
-		trace_power_start(POWER_CSTATE, 1, smp_processor_id());
-		trace_cpu_idle(1, smp_processor_id());
-		if (cpu_has(__this_cpu_ptr(&cpu_info), X86_FEATURE_CLFLUSH_MONITOR))
+		trace_power_start(&it, POWER_CSTATE, 1);
+		if (cpu_has(&current_cpu_data, X86_FEATURE_CLFLUSH_MONITOR))
 			clflush((void *)&current_thread_info()->flags);
 
 		__monitor((void *)&current_thread_info()->flags, 0, 0);
@@ -474,8 +399,7 @@ static void mwait_idle(void)
 			__sti_mwait(0, 0);
 		else
 			local_irq_enable();
-		trace_power_end(smp_processor_id());
-		trace_cpu_idle(PWR_EVENT_EXIT, smp_processor_id());
+		trace_power_end(&it);
 	} else
 		local_irq_enable();
 }
@@ -487,13 +411,13 @@ static void mwait_idle(void)
  */
 static void poll_idle(void)
 {
-	trace_power_start(POWER_CSTATE, 0, smp_processor_id());
-	trace_cpu_idle(0, smp_processor_id());
+	struct power_trace it;
+
+	trace_power_start(&it, POWER_CSTATE, 0);
 	local_irq_enable();
 	while (!need_resched())
 		cpu_relax();
-	trace_power_end(smp_processor_id());
-	trace_cpu_idle(PWR_EVENT_EXIT, smp_processor_id());
+	trace_power_end(&it);
 }
 
 /*
@@ -508,16 +432,17 @@ static void poll_idle(void)
  *
  * idle=mwait overrides this decision and forces the usage of mwait.
  */
+static int __cpuinitdata force_mwait;
 
 #define MWAIT_INFO			0x05
 #define MWAIT_ECX_EXTENDED_INFO		0x01
 #define MWAIT_EDX_C1			0xf0
 
-int mwait_usable(const struct cpuinfo_x86 *c)
+static int __cpuinit mwait_usable(const struct cpuinfo_x86 *c)
 {
 	u32 eax, ebx, ecx, edx;
 
-	if (boot_option_idle_override == IDLE_FORCE_MWAIT)
+	if (force_mwait)
 		return 1;
 
 	if (c->cpuid_level < MWAIT_INFO)
@@ -535,10 +460,26 @@ int mwait_usable(const struct cpuinfo_x86 *c)
 	return (edx & MWAIT_EDX_C1);
 }
 
-bool c1e_detected;
-EXPORT_SYMBOL(c1e_detected);
+/*
+ * Check for AMD CPUs, which have potentially C1E support
+ */
+static int __cpuinit check_c1e_idle(const struct cpuinfo_x86 *c)
+{
+	if (c->x86_vendor != X86_VENDOR_AMD)
+		return 0;
+
+	if (c->x86 < 0x0F)
+		return 0;
+
+	/* Family 0x0f models < rev F do not have C1E */
+	if (c->x86 == 0x0f && c->x86_model < 0x40)
+		return 0;
+
+	return 1;
+}
 
 static cpumask_var_t c1e_mask;
+static int c1e_detected;
 
 void c1e_remove_cpu(int cpu)
 {
@@ -560,12 +501,12 @@ static void c1e_idle(void)
 		u32 lo, hi;
 
 		rdmsr(MSR_K8_INT_PENDING_MSG, lo, hi);
-
 		if (lo & K8_INTP_C1E_ACTIVE_MASK) {
-			c1e_detected = true;
+			c1e_detected = 1;
 			if (!boot_cpu_has(X86_FEATURE_NONSTOP_TSC))
 				mark_tsc_unstable("TSC halt in AMD C1E");
 			printk(KERN_INFO "System has AMD C1E enabled\n");
+			set_cpu_cap(&boot_cpu_data, X86_FEATURE_AMDC1E);
 		}
 	}
 
@@ -575,12 +516,16 @@ static void c1e_idle(void)
 		if (!cpumask_test_cpu(cpu, c1e_mask)) {
 			cpumask_set_cpu(cpu, c1e_mask);
 			/*
-			 * Force broadcast so ACPI can not interfere.
+			 * Force broadcast so ACPI can not interfere. Needs
+			 * to run with interrupts enabled as it uses
+			 * smp_function_call.
 			 */
+			local_irq_enable();
 			clockevents_notify(CLOCK_EVT_NOTIFY_BROADCAST_FORCE,
 					   &cpu);
 			printk(KERN_INFO "Switch to broadcast mode on CPU%d\n",
 			       cpu);
+			local_irq_disable();
 		}
 		clockevents_notify(CLOCK_EVT_NOTIFY_BROADCAST_ENTER, &cpu);
 
@@ -601,7 +546,7 @@ void __cpuinit select_idle_routine(const struct cpuinfo_x86 *c)
 {
 #ifdef CONFIG_SMP
 	if (pm_idle == poll_idle && smp_num_siblings > 1) {
-		printk_once(KERN_WARNING "WARNING: polling idle and HT enabled,"
+		printk(KERN_WARNING "WARNING: polling idle and HT enabled,"
 			" performance may degrade.\n");
 	}
 #endif
@@ -614,8 +559,7 @@ void __cpuinit select_idle_routine(const struct cpuinfo_x86 *c)
 		 */
 		printk(KERN_INFO "using mwait in idle threads.\n");
 		pm_idle = mwait_idle;
-	} else if (cpu_has_amd_erratum(amd_erratum_400)) {
-		/* E400: APIC timer interrupt does not wake up CPU from C1e */
+	} else if (check_c1e_idle(c)) {
 		printk(KERN_INFO "using C1E aware idle routine\n");
 		pm_idle = c1e_idle;
 	} else
@@ -625,8 +569,10 @@ void __cpuinit select_idle_routine(const struct cpuinfo_x86 *c)
 void __init init_c1e_mask(void)
 {
 	/* If we're using c1e_idle, we need to allocate c1e_mask. */
-	if (pm_idle == c1e_idle)
-		zalloc_cpumask_var(&c1e_mask, GFP_KERNEL);
+	if (pm_idle == c1e_idle) {
+		alloc_cpumask_var(&c1e_mask, GFP_KERNEL);
+		cpumask_clear(c1e_mask);
+	}
 }
 
 static int __init idle_setup(char *str)
@@ -637,10 +583,9 @@ static int __init idle_setup(char *str)
 	if (!strcmp(str, "poll")) {
 		printk("using polling idle threads.\n");
 		pm_idle = poll_idle;
-		boot_option_idle_override = IDLE_POLL;
-	} else if (!strcmp(str, "mwait")) {
-		boot_option_idle_override = IDLE_FORCE_MWAIT;
-	} else if (!strcmp(str, "halt")) {
+	} else if (!strcmp(str, "mwait"))
+		force_mwait = 1;
+	else if (!strcmp(str, "halt")) {
 		/*
 		 * When the boot option of idle=halt is added, halt is
 		 * forced to be used for CPU idle. In such case CPU C2/C3
@@ -649,7 +594,8 @@ static int __init idle_setup(char *str)
 		 * the boot_option_idle_override.
 		 */
 		pm_idle = default_idle;
-		boot_option_idle_override = IDLE_HALT;
+		idle_halt = 1;
+		return 0;
 	} else if (!strcmp(str, "nomwait")) {
 		/*
 		 * If the boot option of "idle=nomwait" is added,
@@ -657,24 +603,13 @@ static int __init idle_setup(char *str)
 		 * states. In such case it won't touch the variable
 		 * of boot_option_idle_override.
 		 */
-		boot_option_idle_override = IDLE_NOMWAIT;
+		idle_nomwait = 1;
+		return 0;
 	} else
 		return -1;
 
+	boot_option_idle_override = 1;
 	return 0;
 }
 early_param("idle", idle_setup);
-
-unsigned long arch_align_stack(unsigned long sp)
-{
-	if (!(current->personality & ADDR_NO_RANDOMIZE) && randomize_va_space)
-		sp -= get_random_int() % 8192;
-	return sp & ~0xf;
-}
-
-unsigned long arch_randomize_brk(struct mm_struct *mm)
-{
-	unsigned long range_end = mm->brk + 0x02000000;
-	return randomize_range(mm->brk, range_end, 0) ? : mm->brk;
-}
 

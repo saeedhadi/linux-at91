@@ -11,16 +11,15 @@
 #ifndef __PLAT_GPIO_H
 #define __PLAT_GPIO_H
 
-#include <linux/init.h>
-#include <asm-generic/gpio.h>
-
 /*
  * GENERIC_GPIO primitives.
  */
-#define gpio_get_value  __gpio_get_value
-#define gpio_set_value  __gpio_set_value
-#define gpio_cansleep   __gpio_cansleep
-#define gpio_to_irq     __gpio_to_irq
+int gpio_request(unsigned pin, const char *label);
+void gpio_free(unsigned pin);
+int gpio_direction_input(unsigned pin);
+int gpio_direction_output(unsigned pin, int value);
+int gpio_get_value(unsigned pin);
+void gpio_set_value(unsigned pin, int value);
 
 /*
  * Orion-specific GPIO API extensions.
@@ -28,13 +27,10 @@
 void orion_gpio_set_unused(unsigned pin);
 void orion_gpio_set_blink(unsigned pin, int blink);
 
-#define GPIO_INPUT_OK		(1 << 0)
-#define GPIO_OUTPUT_OK		(1 << 1)
+#define GPIO_BIDI_OK		(1 << 0)
+#define GPIO_INPUT_OK		(1 << 1)
+#define GPIO_OUTPUT_OK		(1 << 2)
 void orion_gpio_set_valid(unsigned pin, int mode);
-
-/* Initialize gpiolib. */
-void __init orion_gpio_init(int gpio_base, int ngpio,
-			    u32 base, int mask_offset, int secondary_irq_base);
 
 /*
  * GPIO interrupt handling.

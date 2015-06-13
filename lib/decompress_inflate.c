@@ -23,13 +23,9 @@
 #endif /* STATIC */
 
 #include <linux/decompress/mm.h>
+#include <linux/slab.h>
 
-#define GZIP_IOBUF_SIZE (16*1024)
-
-static int INIT nofill(void *buffer, unsigned int len)
-{
-	return -1;
-}
+#define INBUF_LEN (16*1024)
 
 /* Included from initramfs et al code */
 STATIC int INIT gunzip(unsigned char *buf, int len,
@@ -37,12 +33,13 @@ STATIC int INIT gunzip(unsigned char *buf, int len,
 		       int(*flush)(void*, unsigned int),
 		       unsigned char *out_buf,
 		       int *pos,
-		       void(*error)(char *x)) {
+		       void(*error_fn)(char *x)) {
 	u8 *zbuf;
 	struct z_stream_s *strm;
 	int rc;
 	size_t out_len;
 
+	set_error_fn(error_fn);
 	rc = -1;
 	if (flush) {
 		out_len = 0x8000; /* 32 K */
@@ -58,7 +55,7 @@ STATIC int INIT gunzip(unsigned char *buf, int len,
 	if (buf)
 		zbuf = buf;
 	else {
-		zbuf = malloc(GZIP_IOBUF_SIZE);
+		zbuf = malloc(INBUF_LEN);
 		len = 0;
 	}
 	if (!zbuf) {
@@ -79,11 +76,8 @@ STATIC int INIT gunzip(unsigned char *buf, int len,
 		goto gunzip_nomem4;
 	}
 
-	if (!fill)
-		fill = nofill;
-
 	if (len == 0)
-		len = fill(zbuf, GZIP_IOBUF_SIZE);
+		len = fill(zbuf, INBUF_LEN);
 
 	/* verify the gzip header */
 	if (len < 10 ||
@@ -98,22 +92,13 @@ STATIC int INIT gunzip(unsigned char *buf, int len,
 	 * possible asciz filename)
 	 */
 	strm->next_in = zbuf + 10;
-	strm->avail_in = len - 10;
 	/* skip over asciz filename */
 	if (zbuf[3] & 0x8) {
-		do {
-			/*
-			 * If the filename doesn't fit into the buffer,
-			 * the file is very probably corrupt. Don't try
-			 * to read more data.
-			 */
-			if (strm->avail_in == 0) {
-				error("header error");
-				goto gunzip_5;
-			}
-			--strm->avail_in;
-		} while (*strm->next_in++);
+		while (strm->next_in[0])
+			strm->next_in++;
+		strm->next_in++;
 	}
+	strm->avail_in = len - (strm->next_in - zbuf);
 
 	strm->next_out = out_buf;
 	strm->avail_out = out_len;
@@ -128,7 +113,7 @@ STATIC int INIT gunzip(unsigned char *buf, int len,
 	while (rc == Z_OK) {
 		if (strm->avail_in == 0) {
 			/* TODO: handle case where both pos and fill are set */
-			len = fill(zbuf, GZIP_IOBUF_SIZE);
+			len = fill(zbuf, INBUF_LEN);
 			if (len < 0) {
 				rc = -1;
 				error("read error");

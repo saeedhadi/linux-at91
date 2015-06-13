@@ -55,11 +55,9 @@
  * ACL support is not implemented.
  */
 
-#include "ubifs.h"
-#include <linux/fs.h>
-#include <linux/slab.h>
 #include <linux/xattr.h>
 #include <linux/posix_acl_xattr.h>
+#include "ubifs.h"
 
 /*
  * Limit the number of extended attributes per inode so that the total size
@@ -80,8 +78,9 @@ enum {
 	SECURITY_XATTR,
 };
 
-static const struct inode_operations none_inode_operations;
-static const struct file_operations none_file_operations;
+static struct inode_operations none_inode_operations;
+static struct address_space_operations none_address_operations;
+static struct file_operations none_file_operations;
 
 /**
  * create_xattr - create an extended attribute.
@@ -130,7 +129,7 @@ static int create_xattr(struct ubifs_info *c, struct inode *host,
 	}
 
 	/* Re-define all operations to be "nothing" */
-	inode->i_mapping->a_ops = &empty_aops;
+	inode->i_mapping->a_ops = &none_address_operations;
 	inode->i_op = &none_inode_operations;
 	inode->i_fop = &none_file_operations;
 

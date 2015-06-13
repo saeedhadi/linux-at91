@@ -229,6 +229,10 @@ enum scsi_prot_operations {
 	/* OS-HBA: Protected, HBA-Target: Protected */
 	SCSI_PROT_READ_PASS,
 	SCSI_PROT_WRITE_PASS,
+
+	/* OS-HBA: Protected, HBA-Target: Protected, checksum conversion */
+	SCSI_PROT_READ_CONVERT,
+	SCSI_PROT_WRITE_CONVERT,
 };
 
 static inline void scsi_set_prot_op(struct scsi_cmnd *scmd, unsigned char op)
@@ -266,7 +270,7 @@ static inline unsigned char scsi_get_prot_type(struct scsi_cmnd *scmd)
 
 static inline sector_t scsi_get_lba(struct scsi_cmnd *scmd)
 {
-	return blk_rq_pos(scmd->request);
+	return scmd->request->sector;
 }
 
 static inline unsigned scsi_prot_sg_count(struct scsi_cmnd *cmd)

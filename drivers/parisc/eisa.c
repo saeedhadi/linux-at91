@@ -144,9 +144,8 @@ static unsigned int eisa_irq_level __read_mostly; /* default to edge triggered *
 
 
 /* called by free irq */
-static void eisa_mask_irq(struct irq_data *d)
+static void eisa_disable_irq(unsigned int irq)
 {
-	unsigned int irq = d->irq;
 	unsigned long flags;
 
 	EISA_DBG("disable irq %d\n", irq);
@@ -165,9 +164,8 @@ static void eisa_mask_irq(struct irq_data *d)
 }
 
 /* called by request irq */
-static void eisa_unmask_irq(struct irq_data *d)
+static void eisa_enable_irq(unsigned int irq)
 {
-	unsigned int irq = d->irq;
 	unsigned long flags;
 	EISA_DBG("enable irq %d\n", irq);
 		
@@ -184,10 +182,20 @@ static void eisa_unmask_irq(struct irq_data *d)
 	EISA_DBG("pic1 mask %02x\n", eisa_in8(0xa1));
 }
 
-static struct irq_chip eisa_interrupt_type = {
-	.name		=	"EISA",
-	.irq_unmask	=	eisa_unmask_irq,
-	.irq_mask	=	eisa_mask_irq,
+static unsigned int eisa_startup_irq(unsigned int irq)
+{
+	eisa_enable_irq(irq);
+	return 0;
+}
+
+static struct hw_interrupt_type eisa_interrupt_type = {
+	.typename =	"EISA",
+	.startup =	eisa_startup_irq,
+	.shutdown =	eisa_disable_irq,
+	.enable =	eisa_enable_irq,
+	.disable =	eisa_disable_irq,
+	.ack =		no_ack_irq,
+	.end =		no_end_irq,
 };
 
 static irqreturn_t eisa_irq(int wax_irq, void *intr_dev)
@@ -225,7 +233,7 @@ static irqreturn_t eisa_irq(int wax_irq, void *intr_dev)
 	}
 	spin_unlock_irqrestore(&eisa_irq_lock, flags);
 
-	generic_handle_irq(irq);
+	__do_IRQ(irq);
    
 	spin_lock_irqsave(&eisa_irq_lock, flags);
 	/* unmask */
@@ -338,10 +346,10 @@ static int __init eisa_probe(struct parisc_device *dev)
 	}
 	
 	/* Reserve IRQ2 */
-	setup_irq(2, &irq2_action);
+	irq_to_desc(2)->action = &irq2_action;
+	
 	for (i = 0; i < 16; i++) {
-		irq_set_chip_and_handler(i, &eisa_interrupt_type,
-					 handle_simple_irq);
+		irq_to_desc(i)->chip = &eisa_interrupt_type;
 	}
 	
 	EISA_bus = 1;
@@ -365,7 +373,7 @@ static int __init eisa_probe(struct parisc_device *dev)
 	if (result >= 0) {
 		/* FIXME : Don't enumerate the bus twice. */
 		eisa_dev.root.dev = &dev->dev;
-		dev_set_drvdata(&dev->dev, &eisa_dev.root);
+		dev->dev.driver_data = &eisa_dev.root;
 		eisa_dev.root.bus_base_addr = 0;
 		eisa_dev.root.res = &eisa_dev.hba.io_space;
 		eisa_dev.root.slots = result;

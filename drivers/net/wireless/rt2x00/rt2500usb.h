@@ -1,5 +1,5 @@
 /*
-	Copyright (C) 2004 - 2009 Ivo van Doorn <IvDoorn@gmail.com>
+	Copyright (C) 2004 - 2009 rt2x00 SourceForge Project
 	<http://rt2x00.serialmonkey.com>
 
 	This program is free software; you can redistribute it and/or modify
@@ -46,7 +46,7 @@
 
 /*
  * Signal information.
- * Default offset is required for RSSI <-> dBm conversion.
+ * Defaul offset is required for RSSI <-> dBm conversion.
  */
 #define DEFAULT_RSSI_OFFSET		120
 
@@ -831,7 +831,7 @@
 #define RXD_W3_EIV			FIELD32(0xffffffff)
 
 /*
- * Macros for converting txpower from EEPROM to mac80211 value
+ * Macro's for converting txpower from EEPROM to mac80211 value
  * and from mac80211 value to register value.
  */
 #define MIN_TXPOWER	0

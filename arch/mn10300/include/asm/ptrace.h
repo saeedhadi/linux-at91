@@ -40,6 +40,7 @@
 #define	PT_PC		26
 #define NR_PTREGS	27
 
+#ifndef __ASSEMBLY__
 /*
  * This defines the way registers are stored in the event of an exception
  * - the strange order is due to the MOVM instruction
@@ -74,6 +75,9 @@ struct pt_regs {
 	unsigned long		epsw;
 	unsigned long		pc;
 };
+#endif
+
+extern struct pt_regs *__frame; /* current frame pointer */
 
 /* Arbitrarily choose the same ptrace numbers as used by the Sparc code. */
 #define PTRACE_GETREGS            12
@@ -84,16 +88,16 @@ struct pt_regs {
 /* options set using PTRACE_SETOPTIONS */
 #define PTRACE_O_TRACESYSGOOD     0x00000001
 
-#ifdef __KERNEL__
+#if defined(__KERNEL__)
 
+#if !defined(__ASSEMBLY__)
 #define user_mode(regs)			(((regs)->epsw & EPSW_nSL) == EPSW_nSL)
 #define instruction_pointer(regs)	((regs)->pc)
-#define user_stack_pointer(regs)	((regs)->sp)
 extern void show_regs(struct pt_regs *);
-
-#define arch_has_single_step()	(1)
+#endif  /*  !__ASSEMBLY  */
 
 #define profile_pc(regs) ((regs)->pc)
 
-#endif /* __KERNEL__  */
+#endif  /*  __KERNEL__  */
+
 #endif /* _ASM_PTRACE_H */

@@ -85,7 +85,6 @@ static int zlib_compress_setup(struct crypto_pcomp *tfm, void *params,
 	struct zlib_ctx *ctx = crypto_tfm_ctx(crypto_pcomp_tfm(tfm));
 	struct z_stream_s *stream = &ctx->comp_stream;
 	struct nlattr *tb[ZLIB_COMP_MAX + 1];
-	int window_bits, mem_level;
 	size_t workspacesize;
 	int ret;
 
@@ -95,18 +94,12 @@ static int zlib_compress_setup(struct crypto_pcomp *tfm, void *params,
 
 	zlib_comp_exit(ctx);
 
-	window_bits = tb[ZLIB_COMP_WINDOWBITS]
-					? nla_get_u32(tb[ZLIB_COMP_WINDOWBITS])
-					: MAX_WBITS;
-	mem_level = tb[ZLIB_COMP_MEMLEVEL]
-					? nla_get_u32(tb[ZLIB_COMP_MEMLEVEL])
-					: DEF_MEM_LEVEL;
-
-	workspacesize = zlib_deflate_workspacesize(window_bits, mem_level);
-	stream->workspace = vzalloc(workspacesize);
+	workspacesize = zlib_deflate_workspacesize();
+	stream->workspace = vmalloc(workspacesize);
 	if (!stream->workspace)
 		return -ENOMEM;
 
+	memset(stream->workspace, 0, workspacesize);
 	ret = zlib_deflateInit2(stream,
 				tb[ZLIB_COMP_LEVEL]
 					? nla_get_u32(tb[ZLIB_COMP_LEVEL])
@@ -114,8 +107,12 @@ static int zlib_compress_setup(struct crypto_pcomp *tfm, void *params,
 				tb[ZLIB_COMP_METHOD]
 					? nla_get_u32(tb[ZLIB_COMP_METHOD])
 					: Z_DEFLATED,
-				window_bits,
-				mem_level,
+				tb[ZLIB_COMP_WINDOWBITS]
+					? nla_get_u32(tb[ZLIB_COMP_WINDOWBITS])
+					: MAX_WBITS,
+				tb[ZLIB_COMP_MEMLEVEL]
+					? nla_get_u32(tb[ZLIB_COMP_MEMLEVEL])
+					: DEF_MEM_LEVEL,
 				tb[ZLIB_COMP_STRATEGY]
 					? nla_get_u32(tb[ZLIB_COMP_STRATEGY])
 					: Z_DEFAULT_STRATEGY);
@@ -168,15 +165,15 @@ static int zlib_compress_update(struct crypto_pcomp *tfm,
 		return -EINVAL;
 	}
 
-	ret = req->avail_out - stream->avail_out;
 	pr_debug("avail_in %u, avail_out %u (consumed %u, produced %u)\n",
 		 stream->avail_in, stream->avail_out,
-		 req->avail_in - stream->avail_in, ret);
+		 req->avail_in - stream->avail_in,
+		 req->avail_out - stream->avail_out);
 	req->next_in = stream->next_in;
 	req->avail_in = stream->avail_in;
 	req->next_out = stream->next_out;
 	req->avail_out = stream->avail_out;
-	return ret;
+	return 0;
 }
 
 static int zlib_compress_final(struct crypto_pcomp *tfm,
@@ -198,15 +195,15 @@ static int zlib_compress_final(struct crypto_pcomp *tfm,
 		return -EINVAL;
 	}
 
-	ret = req->avail_out - stream->avail_out;
 	pr_debug("avail_in %u, avail_out %u (consumed %u, produced %u)\n",
 		 stream->avail_in, stream->avail_out,
-		 req->avail_in - stream->avail_in, ret);
+		 req->avail_in - stream->avail_in,
+		 req->avail_out - stream->avail_out);
 	req->next_in = stream->next_in;
 	req->avail_in = stream->avail_in;
 	req->next_out = stream->next_out;
 	req->avail_out = stream->avail_out;
-	return ret;
+	return 0;
 }
 
 
@@ -283,15 +280,15 @@ static int zlib_decompress_update(struct crypto_pcomp *tfm,
 		return -EINVAL;
 	}
 
-	ret = req->avail_out - stream->avail_out;
 	pr_debug("avail_in %u, avail_out %u (consumed %u, produced %u)\n",
 		 stream->avail_in, stream->avail_out,
-		 req->avail_in - stream->avail_in, ret);
+		 req->avail_in - stream->avail_in,
+		 req->avail_out - stream->avail_out);
 	req->next_in = stream->next_in;
 	req->avail_in = stream->avail_in;
 	req->next_out = stream->next_out;
 	req->avail_out = stream->avail_out;
-	return ret;
+	return 0;
 }
 
 static int zlib_decompress_final(struct crypto_pcomp *tfm,
@@ -331,15 +328,15 @@ static int zlib_decompress_final(struct crypto_pcomp *tfm,
 		return -EINVAL;
 	}
 
-	ret = req->avail_out - stream->avail_out;
 	pr_debug("avail_in %u, avail_out %u (consumed %u, produced %u)\n",
 		 stream->avail_in, stream->avail_out,
-		 req->avail_in - stream->avail_in, ret);
+		 req->avail_in - stream->avail_in,
+		 req->avail_out - stream->avail_out);
 	req->next_in = stream->next_in;
 	req->avail_in = stream->avail_in;
 	req->next_out = stream->next_out;
 	req->avail_out = stream->avail_out;
-	return ret;
+	return 0;
 }
 
 

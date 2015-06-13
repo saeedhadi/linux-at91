@@ -1,7 +1,7 @@
 /******************************************************************************
 *******************************************************************************
 **
-**  Copyright (C) 2005-2010 Red Hat, Inc.  All rights reserved.
+**  Copyright (C) 2005-2008 Red Hat, Inc.  All rights reserved.
 **
 **  This copyrighted material is made available to anyone wishing to use,
 **  modify, copy, or redistribute it subject to the terms and conditions
@@ -56,7 +56,6 @@
    L: receive_xxxx_reply()     <-  R: send_xxxx_reply()
 */
 #include <linux/types.h>
-#include <linux/slab.h>
 #include "dlm_internal.h"
 #include <linux/dlm_device.h>
 #include "memory.h"
@@ -160,10 +159,10 @@ static const int __quecvt_compat_matrix[8][8] = {
 void dlm_print_lkb(struct dlm_lkb *lkb)
 {
 	printk(KERN_ERR "lkb: nodeid %d id %x remid %x exflags %x flags %x\n"
-	       "     status %d rqmode %d grmode %d wait_type %d\n",
+	       "     status %d rqmode %d grmode %d wait_type %d ast_type %d\n",
 	       lkb->lkb_nodeid, lkb->lkb_id, lkb->lkb_remid, lkb->lkb_exflags,
 	       lkb->lkb_flags, lkb->lkb_status, lkb->lkb_rqmode,
-	       lkb->lkb_grmode, lkb->lkb_wait_type);
+	       lkb->lkb_grmode, lkb->lkb_wait_type, lkb->lkb_ast_type);
 }
 
 static void dlm_print_rsb(struct dlm_rsb *r)
@@ -305,7 +304,10 @@ static void queue_cast(struct dlm_rsb *r, struct dlm_lkb *lkb, int rv)
 		rv = -EDEADLK;
 	}
 
-	dlm_add_ast(lkb, DLM_CB_CAST, lkb->lkb_grmode, rv, lkb->lkb_sbflags);
+	lkb->lkb_lksb->sb_status = rv;
+	lkb->lkb_lksb->sb_flags = lkb->lkb_sbflags;
+
+	dlm_add_ast(lkb, AST_COMP, 0);
 }
 
 static inline void queue_cast_overlap(struct dlm_rsb *r, struct dlm_lkb *lkb)
@@ -316,11 +318,12 @@ static inline void queue_cast_overlap(struct dlm_rsb *r, struct dlm_lkb *lkb)
 
 static void queue_bast(struct dlm_rsb *r, struct dlm_lkb *lkb, int rqmode)
 {
-	if (is_master_copy(lkb)) {
+	lkb->lkb_time_bast = ktime_get();
+
+	if (is_master_copy(lkb))
 		send_bast(r, lkb, rqmode);
-	} else {
-		dlm_add_ast(lkb, DLM_CB_BAST, rqmode, 0, 0);
-	}
+	else
+		dlm_add_ast(lkb, AST_BAST, rqmode);
 }
 
 /*
@@ -432,7 +435,7 @@ static int search_rsb(struct dlm_ls *ls, char *name, int len, int b,
 static int find_rsb(struct dlm_ls *ls, char *name, int namelen,
 		    unsigned int flags, struct dlm_rsb **r_ret)
 {
-	struct dlm_rsb *r = NULL, *tmp;
+	struct dlm_rsb *r, *tmp;
 	uint32_t hash, bucket;
 	int error = -EINVAL;
 
@@ -519,7 +522,7 @@ static void toss_rsb(struct kref *kref)
 	}
 }
 
-/* When all references to the rsb are gone it's transferred to
+/* When all references to the rsb are gone it's transfered to
    the tossed list for later disposal. */
 
 static void put_rsb(struct dlm_rsb *r)
@@ -594,7 +597,6 @@ static int create_lkb(struct dlm_ls *ls, struct dlm_lkb **lkb_ret)
 	INIT_LIST_HEAD(&lkb->lkb_ownqueue);
 	INIT_LIST_HEAD(&lkb->lkb_rsb_lookup);
 	INIT_LIST_HEAD(&lkb->lkb_time_list);
-	INIT_LIST_HEAD(&lkb->lkb_astqueue);
 
 	get_random_bytes(&bucket, sizeof(bucket));
 	bucket &= (ls->ls_lkbtbl_size - 1);
@@ -728,7 +730,10 @@ static void lkb_add_ordered(struct list_head *new, struct list_head *head,
 		if (lkb->lkb_rqmode < mode)
 			break;
 
-	__list_add(new, lkb->lkb_statequeue.prev, &lkb->lkb_statequeue);
+	if (!lkb)
+		list_add_tail(new, head);
+	else
+		__list_add(new, lkb->lkb_statequeue.prev, &lkb->lkb_statequeue);
 }
 
 /* add/remove lkb to rsb's grant/convert/wait queue */
@@ -1841,9 +1846,6 @@ static void send_bast_queue(struct dlm_rsb *r, struct list_head *head,
 	struct dlm_lkb *gr;
 
 	list_for_each_entry(gr, head, lkb_statequeue) {
-		/* skip self when sending basts to convertqueue */
-		if (gr == lkb)
-			continue;
 		if (gr->lkb_bastfn && modes_require_bast(gr, lkb)) {
 			queue_bast(r, gr, lkb->lkb_rqmode);
 			gr->lkb_highbast = lkb->lkb_rqmode;
@@ -2278,28 +2280,18 @@ static int do_request(struct dlm_rsb *r, struct dlm_lkb *lkb)
 	if (can_be_queued(lkb)) {
 		error = -EINPROGRESS;
 		add_lkb(r, lkb, DLM_LKSTS_WAITING);
+		send_blocking_asts(r, lkb);
 		add_timeout(lkb);
 		goto out;
 	}
 
 	error = -EAGAIN;
+	if (force_blocking_asts(lkb))
+		send_blocking_asts_all(r, lkb);
 	queue_cast(r, lkb, -EAGAIN);
+
  out:
 	return error;
-}
-
-static void do_request_effects(struct dlm_rsb *r, struct dlm_lkb *lkb,
-			       int error)
-{
-	switch (error) {
-	case -EAGAIN:
-		if (force_blocking_asts(lkb))
-			send_blocking_asts_all(r, lkb);
-		break;
-	case -EINPROGRESS:
-		send_blocking_asts(r, lkb);
-		break;
-	}
 }
 
 static int do_convert(struct dlm_rsb *r, struct dlm_lkb *lkb)
@@ -2312,6 +2304,7 @@ static int do_convert(struct dlm_rsb *r, struct dlm_lkb *lkb)
 	if (can_be_granted(r, lkb, 1, &deadlk)) {
 		grant_lock(r, lkb);
 		queue_cast(r, lkb, 0);
+		grant_pending_locks(r);
 		goto out;
 	}
 
@@ -2341,6 +2334,7 @@ static int do_convert(struct dlm_rsb *r, struct dlm_lkb *lkb)
 		if (_can_be_granted(r, lkb, 1)) {
 			grant_lock(r, lkb);
 			queue_cast(r, lkb, 0);
+			grant_pending_locks(r);
 			goto out;
 		}
 		/* else fall through and move to convert queue */
@@ -2350,45 +2344,26 @@ static int do_convert(struct dlm_rsb *r, struct dlm_lkb *lkb)
 		error = -EINPROGRESS;
 		del_lkb(r, lkb);
 		add_lkb(r, lkb, DLM_LKSTS_CONVERT);
+		send_blocking_asts(r, lkb);
 		add_timeout(lkb);
 		goto out;
 	}
 
 	error = -EAGAIN;
+	if (force_blocking_asts(lkb))
+		send_blocking_asts_all(r, lkb);
 	queue_cast(r, lkb, -EAGAIN);
+
  out:
 	return error;
-}
-
-static void do_convert_effects(struct dlm_rsb *r, struct dlm_lkb *lkb,
-			       int error)
-{
-	switch (error) {
-	case 0:
-		grant_pending_locks(r);
-		/* grant_pending_locks also sends basts */
-		break;
-	case -EAGAIN:
-		if (force_blocking_asts(lkb))
-			send_blocking_asts_all(r, lkb);
-		break;
-	case -EINPROGRESS:
-		send_blocking_asts(r, lkb);
-		break;
-	}
 }
 
 static int do_unlock(struct dlm_rsb *r, struct dlm_lkb *lkb)
 {
 	remove_lock(r, lkb);
 	queue_cast(r, lkb, -DLM_EUNLOCK);
-	return -DLM_EUNLOCK;
-}
-
-static void do_unlock_effects(struct dlm_rsb *r, struct dlm_lkb *lkb,
-			      int error)
-{
 	grant_pending_locks(r);
+	return -DLM_EUNLOCK;
 }
 
 /* returns: 0 did nothing, -DLM_ECANCEL canceled lock */
@@ -2400,16 +2375,10 @@ static int do_cancel(struct dlm_rsb *r, struct dlm_lkb *lkb)
 	error = revert_lock(r, lkb);
 	if (error) {
 		queue_cast(r, lkb, -DLM_ECANCEL);
+		grant_pending_locks(r);
 		return -DLM_ECANCEL;
 	}
 	return 0;
-}
-
-static void do_cancel_effects(struct dlm_rsb *r, struct dlm_lkb *lkb,
-			      int error)
-{
-	if (error)
-		grant_pending_locks(r);
 }
 
 /*
@@ -2433,15 +2402,11 @@ static int _request_lock(struct dlm_rsb *r, struct dlm_lkb *lkb)
 		goto out;
 	}
 
-	if (is_remote(r)) {
+	if (is_remote(r))
 		/* receive_request() calls do_request() on remote node */
 		error = send_request(r, lkb);
-	} else {
+	else
 		error = do_request(r, lkb);
-		/* for remote locks the request_reply is sent
-		   between do_request and do_request_effects */
-		do_request_effects(r, lkb, error);
-	}
  out:
 	return error;
 }
@@ -2452,15 +2417,11 @@ static int _convert_lock(struct dlm_rsb *r, struct dlm_lkb *lkb)
 {
 	int error;
 
-	if (is_remote(r)) {
+	if (is_remote(r))
 		/* receive_convert() calls do_convert() on remote node */
 		error = send_convert(r, lkb);
-	} else {
+	else
 		error = do_convert(r, lkb);
-		/* for remote locks the convert_reply is sent
-		   between do_convert and do_convert_effects */
-		do_convert_effects(r, lkb, error);
-	}
 
 	return error;
 }
@@ -2471,15 +2432,11 @@ static int _unlock_lock(struct dlm_rsb *r, struct dlm_lkb *lkb)
 {
 	int error;
 
-	if (is_remote(r)) {
+	if (is_remote(r))
 		/* receive_unlock() calls do_unlock() on remote node */
 		error = send_unlock(r, lkb);
-	} else {
+	else
 		error = do_unlock(r, lkb);
-		/* for remote locks the unlock_reply is sent
-		   between do_unlock and do_unlock_effects */
-		do_unlock_effects(r, lkb, error);
-	}
 
 	return error;
 }
@@ -2490,15 +2447,11 @@ static int _cancel_lock(struct dlm_rsb *r, struct dlm_lkb *lkb)
 {
 	int error;
 
-	if (is_remote(r)) {
+	if (is_remote(r))
 		/* receive_cancel() calls do_cancel() on remote node */
 		error = send_cancel(r, lkb);
-	} else {
+	else
 		error = do_cancel(r, lkb);
-		/* for remote locks the cancel_reply is sent
-		   between do_cancel and do_cancel_effects */
-		do_cancel_effects(r, lkb, error);
-	}
 
 	return error;
 }
@@ -2736,7 +2689,7 @@ static int _create_message(struct dlm_ls *ls, int mb_len,
 	   pass into lowcomms_commit and a message buffer (mb) that we
 	   write our data into */
 
-	mh = dlm_lowcomms_get_buffer(to_nodeid, mb_len, GFP_NOFS, &mb);
+	mh = dlm_lowcomms_get_buffer(to_nodeid, mb_len, ls->ls_allocation, &mb);
 	if (!mh)
 		return -ENOBUFS;
 
@@ -2814,9 +2767,9 @@ static void send_args(struct dlm_rsb *r, struct dlm_lkb *lkb,
 	   not from lkb fields */
 
 	if (lkb->lkb_bastfn)
-		ms->m_asts |= DLM_CB_BAST;
+		ms->m_asts |= AST_BAST;
 	if (lkb->lkb_astfn)
-		ms->m_asts |= DLM_CB_CAST;
+		ms->m_asts |= AST_COMP;
 
 	/* compare with switch in create_message; send_remove() doesn't
 	   use send_args() */
@@ -3117,8 +3070,8 @@ static int receive_request_args(struct dlm_ls *ls, struct dlm_lkb *lkb,
 	lkb->lkb_grmode = DLM_LOCK_IV;
 	lkb->lkb_rqmode = ms->m_rqmode;
 
-	lkb->lkb_bastfn = (ms->m_asts & DLM_CB_BAST) ? &fake_bastfn : NULL;
-	lkb->lkb_astfn = (ms->m_asts & DLM_CB_CAST) ? &fake_astfn : NULL;
+	lkb->lkb_bastfn = (ms->m_asts & AST_BAST) ? &fake_bastfn : NULL;
+	lkb->lkb_astfn = (ms->m_asts & AST_COMP) ? &fake_astfn : NULL;
 
 	if (lkb->lkb_exflags & DLM_LKF_VALBLK) {
 		/* lkb was just created so there won't be an lvb yet */
@@ -3238,7 +3191,6 @@ static void receive_request(struct dlm_ls *ls, struct dlm_message *ms)
 	attach_lkb(r, lkb);
 	error = do_request(r, lkb);
 	send_request_reply(r, lkb, error);
-	do_request_effects(r, lkb, error);
 
 	unlock_rsb(r);
 	put_rsb(r);
@@ -3274,19 +3226,15 @@ static void receive_convert(struct dlm_ls *ls, struct dlm_message *ms)
 		goto out;
 
 	receive_flags(lkb, ms);
-
 	error = receive_convert_args(ls, lkb, ms);
-	if (error) {
-		send_convert_reply(r, lkb, error);
-		goto out;
-	}
-
+	if (error)
+		goto out_reply;
 	reply = !down_conversion(lkb);
 
 	error = do_convert(r, lkb);
+ out_reply:
 	if (reply)
 		send_convert_reply(r, lkb, error);
-	do_convert_effects(r, lkb, error);
  out:
 	unlock_rsb(r);
 	put_rsb(r);
@@ -3318,16 +3266,13 @@ static void receive_unlock(struct dlm_ls *ls, struct dlm_message *ms)
 		goto out;
 
 	receive_flags(lkb, ms);
-
 	error = receive_unlock_args(ls, lkb, ms);
-	if (error) {
-		send_unlock_reply(r, lkb, error);
-		goto out;
-	}
+	if (error)
+		goto out_reply;
 
 	error = do_unlock(r, lkb);
+ out_reply:
 	send_unlock_reply(r, lkb, error);
-	do_unlock_effects(r, lkb, error);
  out:
 	unlock_rsb(r);
 	put_rsb(r);
@@ -3362,7 +3307,6 @@ static void receive_cancel(struct dlm_ls *ls, struct dlm_message *ms)
 
 	error = do_cancel(r, lkb);
 	send_cancel_reply(r, lkb, error);
-	do_cancel_effects(r, lkb, error);
  out:
 	unlock_rsb(r);
 	put_rsb(r);
@@ -4407,8 +4351,8 @@ static int receive_rcom_lock_args(struct dlm_ls *ls, struct dlm_lkb *lkb,
 	lkb->lkb_grmode = rl->rl_grmode;
 	/* don't set lkb_status because add_lkb wants to itself */
 
-	lkb->lkb_bastfn = (rl->rl_asts & DLM_CB_BAST) ? &fake_bastfn : NULL;
-	lkb->lkb_astfn = (rl->rl_asts & DLM_CB_CAST) ? &fake_astfn : NULL;
+	lkb->lkb_bastfn = (rl->rl_asts & AST_BAST) ? &fake_bastfn : NULL;
+	lkb->lkb_astfn = (rl->rl_asts & AST_COMP) ? &fake_astfn : NULL;
 
 	if (lkb->lkb_exflags & DLM_LKF_VALBLK) {
 		int lvblen = rc->rc_header.h_length - sizeof(struct dlm_rcom) -
@@ -4568,7 +4512,7 @@ int dlm_user_request(struct dlm_ls *ls, struct dlm_user_args *ua,
 	}
 
 	if (flags & DLM_LKF_VALBLK) {
-		ua->lksb.sb_lvbptr = kzalloc(DLM_USER_LVB_LEN, GFP_NOFS);
+		ua->lksb.sb_lvbptr = kzalloc(DLM_USER_LVB_LEN, GFP_KERNEL);
 		if (!ua->lksb.sb_lvbptr) {
 			kfree(ua);
 			__put_lkb(ls, lkb);
@@ -4584,6 +4528,7 @@ int dlm_user_request(struct dlm_ls *ls, struct dlm_user_args *ua,
 	error = set_lock_args(mode, &ua->lksb, flags, namelen, timeout_cs,
 			      fake_astfn, ua, fake_bastfn, &args);
 	lkb->lkb_flags |= DLM_IFL_USER;
+	ua->old_mode = DLM_LOCK_IV;
 
 	if (error) {
 		__put_lkb(ls, lkb);
@@ -4637,7 +4582,7 @@ int dlm_user_convert(struct dlm_ls *ls, struct dlm_user_args *ua_tmp,
 	ua = lkb->lkb_ua;
 
 	if (flags & DLM_LKF_VALBLK && !ua->lksb.sb_lvbptr) {
-		ua->lksb.sb_lvbptr = kzalloc(DLM_USER_LVB_LEN, GFP_NOFS);
+		ua->lksb.sb_lvbptr = kzalloc(DLM_USER_LVB_LEN, GFP_KERNEL);
 		if (!ua->lksb.sb_lvbptr) {
 			error = -ENOMEM;
 			goto out_put;
@@ -4652,6 +4597,7 @@ int dlm_user_convert(struct dlm_ls *ls, struct dlm_user_args *ua_tmp,
 	ua->bastparam = ua_tmp->bastparam;
 	ua->bastaddr = ua_tmp->bastaddr;
 	ua->user_lksb = ua_tmp->user_lksb;
+	ua->old_mode = lkb->lkb_grmode;
 
 	error = set_lock_args(mode, &ua->lksb, flags, 0, timeout_cs,
 			      fake_astfn, ua, fake_bastfn, &args);
@@ -4910,9 +4856,8 @@ void dlm_clear_proc_locks(struct dlm_ls *ls, struct dlm_user_proc *proc)
 	}
 
 	list_for_each_entry_safe(lkb, safe, &proc->asts, lkb_astqueue) {
-		memset(&lkb->lkb_callbacks, 0,
-		       sizeof(struct dlm_callback) * DLM_CALLBACKS_SIZE);
-		list_del_init(&lkb->lkb_astqueue);
+		lkb->lkb_ast_type = 0;
+		list_del(&lkb->lkb_astqueue);
 		dlm_put_lkb(lkb);
 	}
 
@@ -4952,9 +4897,7 @@ static void purge_proc_locks(struct dlm_ls *ls, struct dlm_user_proc *proc)
 
 	spin_lock(&proc->asts_spin);
 	list_for_each_entry_safe(lkb, safe, &proc->asts, lkb_astqueue) {
-		memset(&lkb->lkb_callbacks, 0,
-		       sizeof(struct dlm_callback) * DLM_CALLBACKS_SIZE);
-		list_del_init(&lkb->lkb_astqueue);
+		list_del(&lkb->lkb_astqueue);
 		dlm_put_lkb(lkb);
 	}
 	spin_unlock(&proc->asts_spin);

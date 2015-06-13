@@ -18,7 +18,7 @@
  * a subset of information returned via ctl info callback
  */
 struct link_ctl_info {
-	snd_ctl_elem_type_t type; /* value type */
+	int type;		/* value type */
 	int count;		/* item count */
 	int min_val, max_val;	/* min, max values */
 };
@@ -233,7 +233,7 @@ static void slave_free(struct snd_kcontrol *kcontrol)
  * Add a slave control to the group with the given master control
  *
  * All slaves must be the same type (returning the same information
- * via info callback).  The function doesn't check it, so it's your
+ * via info callback).  The fucntion doesn't check it, so it's your
  * responsibility.
  *
  * Also, some additional limitations:
@@ -353,8 +353,7 @@ static void master_free(struct snd_kcontrol *kcontrol)
  *
  * The optional argument @tlv can be used to specify the TLV information
  * for dB scale of the master control.  It should be a single element
- * with #SNDRV_CTL_TLVT_DB_SCALE, #SNDRV_CTL_TLV_DB_MINMAX or
- * #SNDRV_CTL_TLVT_DB_MINMAX_MUTE type, and should be the max 0dB.
+ * with #SNDRV_CTL_TLVT_DB_SCALE type, and should be the max 0dB.
  */
 struct snd_kcontrol *snd_ctl_make_virtual_master(char *name,
 						 const unsigned int *tlv)
@@ -385,10 +384,7 @@ struct snd_kcontrol *snd_ctl_make_virtual_master(char *name,
 	kctl->private_free = master_free;
 
 	/* additional (constant) TLV read */
-	if (tlv &&
-	    (tlv[0] == SNDRV_CTL_TLVT_DB_SCALE ||
-	     tlv[0] == SNDRV_CTL_TLVT_DB_MINMAX ||
-	     tlv[0] == SNDRV_CTL_TLVT_DB_MINMAX_MUTE)) {
+	if (tlv && tlv[0] == SNDRV_CTL_TLVT_DB_SCALE) {
 		kctl->vd[0].access |= SNDRV_CTL_ELEM_ACCESS_TLV_READ;
 		memcpy(master->tlv, tlv, sizeof(master->tlv));
 		kctl->tlv.p = master->tlv;

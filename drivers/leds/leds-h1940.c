@@ -16,8 +16,6 @@
 #include <linux/string.h>
 #include <linux/ctype.h>
 #include <linux/leds.h>
-#include <linux/gpio.h>
-
 #include <mach/regs-gpio.h>
 #include <mach/hardware.h>
 #include <mach/h1940-latch.h>

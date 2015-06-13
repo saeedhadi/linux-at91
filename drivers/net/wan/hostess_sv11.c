@@ -15,7 +15,7 @@
  *	The hardware does the bus handling to avoid the need for delays between
  *	touching control registers.
  *
- *	Port B isn't wired (why - beats me)
+ *	Port B isnt wired (why - beats me)
  *
  *	Generic HDLC port Copyright (C) 2008 Krzysztof Halasa <khc@pm.waw.pl>
  */
@@ -30,7 +30,6 @@
 #include <linux/delay.h>
 #include <linux/hdlc.h>
 #include <linux/ioport.h>
-#include <linux/slab.h>
 #include <net/arp.h>
 
 #include <asm/irq.h>
@@ -157,8 +156,7 @@ static int hostess_ioctl(struct net_device *d, struct ifreq *ifr, int cmd)
  *	Passed network frames, fire them downwind.
  */
 
-static netdev_tx_t hostess_queue_xmit(struct sk_buff *skb,
-					    struct net_device *d)
+static int hostess_queue_xmit(struct sk_buff *skb, struct net_device *d)
 {
 	return z8530_queue_xmit(&dev_to_sv(d)->chanA, skb);
 }
@@ -219,7 +217,7 @@ static struct z8530_dev *sv11_init(int iobase, int irq)
 	/* We want a fast IRQ for this device. Actually we'd like an even faster
 	   IRQ ;) - This is one driver RtLinux is made for */
 
-	if (request_irq(irq, z8530_interrupt, IRQF_DISABLED,
+	if (request_irq(irq, &z8530_interrupt, IRQF_DISABLED,
 			"Hostess SV11", sv) < 0) {
 		printk(KERN_WARNING "hostess: IRQ %d already in use.\n", irq);
 		goto err_irq;

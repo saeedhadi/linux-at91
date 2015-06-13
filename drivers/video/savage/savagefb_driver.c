@@ -385,7 +385,7 @@ SavageSetup2DEngine(struct savagefb_par  *par)
 	BCI_SEND(GlobalBitmapDescriptor);
 
 	/*
-	 * I don't know why, sending this twice fixes the initial black screen,
+	 * I don't know why, sending this twice fixes the intial black screen,
 	 * prevents X from crashing at least in Toshiba laptops with SavageIX.
 	 * --Tony
 	 */
@@ -1565,7 +1565,7 @@ static int savagefb_blank(int blank, struct fb_info *info)
 		vga_out8(0x3c5, sr8, par);
 		vga_out8(0x3c4, 0x0d, par);
 		srd = vga_in8(0x3c5, par);
-		srd &= 0x50;
+		srd &= 0x03;
 
 		switch (blank) {
 		case FB_BLANK_UNBLANK:
@@ -1604,6 +1604,22 @@ static int savagefb_blank(int blank, struct fb_info *info)
 	}
 
 	return (blank == FB_BLANK_NORMAL) ? 1 : 0;
+}
+
+static void savagefb_save_state(struct fb_info *info)
+{
+	struct savagefb_par *par = info->par;
+
+	savage_get_default_par(par, &par->save);
+}
+
+static void savagefb_restore_state(struct fb_info *info)
+{
+	struct savagefb_par *par = info->par;
+
+	savagefb_blank(FB_BLANK_POWERDOWN, info);
+	savage_set_default_par(par, &par->save);
+	savagefb_blank(FB_BLANK_UNBLANK, info);
 }
 
 static int savagefb_open(struct fb_info *info, int user)
@@ -1651,6 +1667,8 @@ static struct fb_ops savagefb_ops = {
 	.fb_setcolreg   = savagefb_setcolreg,
 	.fb_pan_display = savagefb_pan_display,
 	.fb_blank       = savagefb_blank,
+	.fb_save_state  = savagefb_save_state,
+	.fb_restore_state = savagefb_restore_state,
 #if defined(CONFIG_FB_SAVAGE_ACCEL)
 	.fb_fillrect    = savagefb_fillrect,
 	.fb_copyarea    = savagefb_copyarea,
@@ -2211,7 +2229,7 @@ static int __devinit savagefb_probe(struct pci_dev* dev,
 		goto failed_mmio;
 
 	video_len = savage_init_hw(par);
-	/* FIXME: can't be negative */
+	/* FIXME: cant be negative */
 	if (video_len < 0) {
 		err = video_len;
 		goto failed_mmio;
@@ -2373,7 +2391,7 @@ static int savagefb_suspend(struct pci_dev *dev, pm_message_t mesg)
 	if (mesg.event == PM_EVENT_FREEZE)
 		return 0;
 
-	console_lock();
+	acquire_console_sem();
 	fb_set_suspend(info, 1);
 
 	if (info->fbops->fb_sync)
@@ -2385,7 +2403,7 @@ static int savagefb_suspend(struct pci_dev *dev, pm_message_t mesg)
 	pci_save_state(dev);
 	pci_disable_device(dev);
 	pci_set_power_state(dev, pci_choose_state(dev, mesg));
-	console_unlock();
+	release_console_sem();
 
 	return 0;
 }
@@ -2409,7 +2427,7 @@ static int savagefb_resume(struct pci_dev* dev)
 		return 0;
 	}
 
-	console_lock();
+	acquire_console_sem();
 
 	pci_set_power_state(dev, PCI_D0);
 	pci_restore_state(dev);
@@ -2423,7 +2441,7 @@ static int savagefb_resume(struct pci_dev* dev)
 	savagefb_set_par(info);
 	fb_set_suspend(info, 0);
 	savagefb_blank(FB_BLANK_UNBLANK, info);
-	console_unlock();
+	release_console_sem();
 
 	return 0;
 }

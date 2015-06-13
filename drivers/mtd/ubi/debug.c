@@ -27,20 +27,6 @@
 #ifdef CONFIG_MTD_UBI_DEBUG
 
 #include "ubi.h"
-#include <linux/module.h>
-#include <linux/moduleparam.h>
-
-unsigned int ubi_msg_flags;
-unsigned int ubi_chk_flags;
-unsigned int ubi_tst_flags;
-
-module_param_named(debug_msgs, ubi_msg_flags, uint, S_IRUGO | S_IWUSR);
-module_param_named(debug_chks, ubi_chk_flags, uint, S_IRUGO | S_IWUSR);
-module_param_named(debug_tsts, ubi_chk_flags, uint, S_IRUGO | S_IWUSR);
-
-MODULE_PARM_DESC(debug_msgs, "Debug message type flags");
-MODULE_PARM_DESC(debug_chks, "Debug check flags");
-MODULE_PARM_DESC(debug_tsts, "Debug special test flags");
 
 /**
  * ubi_dbg_dump_ec_hdr - dump an erase counter header.
@@ -58,8 +44,6 @@ void ubi_dbg_dump_ec_hdr(const struct ubi_ec_hdr *ec_hdr)
 	       be32_to_cpu(ec_hdr->vid_hdr_offset));
 	printk(KERN_DEBUG "\tdata_offset    %d\n",
 	       be32_to_cpu(ec_hdr->data_offset));
-	printk(KERN_DEBUG "\timage_seq      %d\n",
-	       be32_to_cpu(ec_hdr->image_seq));
 	printk(KERN_DEBUG "\thdr_crc        %#08x\n",
 	       be32_to_cpu(ec_hdr->hdr_crc));
 	printk(KERN_DEBUG "erase counter header hexdump:\n");
@@ -208,38 +192,6 @@ void ubi_dbg_dump_mkvol_req(const struct ubi_mkvol_req *req)
 	memcpy(nm, req->name, 16);
 	nm[16] = 0;
 	printk(KERN_DEBUG "\t1st 16 characters of name: %s\n", nm);
-}
-
-/**
- * ubi_dbg_dump_flash - dump a region of flash.
- * @ubi: UBI device description object
- * @pnum: the physical eraseblock number to dump
- * @offset: the starting offset within the physical eraseblock to dump
- * @len: the length of the region to dump
- */
-void ubi_dbg_dump_flash(struct ubi_device *ubi, int pnum, int offset, int len)
-{
-	int err;
-	size_t read;
-	void *buf;
-	loff_t addr = (loff_t)pnum * ubi->peb_size + offset;
-
-	buf = vmalloc(len);
-	if (!buf)
-		return;
-	err = ubi->mtd->read(ubi->mtd, addr, len, &read, buf);
-	if (err && err != -EUCLEAN) {
-		ubi_err("error %d while reading %d bytes from PEB %d:%d, "
-			"read %zd bytes", err, len, pnum, offset, read);
-		goto out;
-	}
-
-	dbg_msg("dumping %d bytes of data from PEB %d, offset %d",
-		len, pnum, offset);
-	print_hex_dump(KERN_DEBUG, "", DUMP_PREFIX_OFFSET, 32, 1, buf, len, 1);
-out:
-	vfree(buf);
-	return;
 }
 
 #endif /* CONFIG_MTD_UBI_DEBUG */

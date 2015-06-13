@@ -33,11 +33,13 @@
 #include <linux/timer.h>
 #include <linux/list.h>
 #include <linux/interrupt.h>
+#include <linux/reboot.h>
 #include <linux/usb.h>
-#include <linux/usb/hcd.h>
 #include <linux/moduleparam.h>
 #include <linux/dma-mapping.h>
 #include <linux/io.h>
+
+#include "../core/hcd.h"
 
 #include <asm/irq.h>
 #include <asm/system.h>
@@ -451,9 +453,9 @@ static void ehci_hub_descriptor(struct oxu_hcd *oxu,
 	temp = 1 + (ports / 8);
 	desc->bDescLength = 7 + 2 * temp;
 
-	/* ports removable, and usb 1.0 legacy PortPwrCtrlMask */
-	memset(&desc->u.hs.DeviceRemovable[0], 0, temp);
-	memset(&desc->u.hs.DeviceRemovable[temp], 0xff, temp);
+	/* two bitmaps:  ports removable, and usb 1.0 legacy PortPwrCtrlMask */
+	memset(&desc->bitmap[0], 0, temp);
+	memset(&desc->bitmap[temp], 0xff, temp);
 
 	temp = 0x0008;			/* per-port overcurrent reporting */
 	if (HCS_PPC(oxu->hcs_params))
@@ -544,6 +546,8 @@ static void oxu_buf_free(struct oxu_hcd *oxu, struct ehci_qtd *qtd)
 	qtd->buffer = NULL;
 
 	spin_unlock(&oxu->mem_lock);
+
+	return;
 }
 
 static inline void ehci_qtd_init(struct ehci_qtd *qtd, dma_addr_t dma)
@@ -569,6 +573,8 @@ static inline void oxu_qtd_free(struct oxu_hcd *oxu, struct ehci_qtd *qtd)
 	oxu->qtd_used[index] = 0;
 
 	spin_unlock(&oxu->mem_lock);
+
+	return;
 }
 
 static struct ehci_qtd *ehci_qtd_alloc(struct oxu_hcd *oxu)
@@ -611,6 +617,8 @@ static void oxu_qh_free(struct oxu_hcd *oxu, struct ehci_qh *qh)
 	oxu->qh_used[index] = 0;
 
 	spin_unlock(&oxu->mem_lock);
+
+	return;
 }
 
 static void qh_destroy(struct kref *kref)
@@ -653,13 +661,13 @@ static struct ehci_qh *oxu_qh_alloc(struct oxu_hcd *oxu)
 		if (qh->dummy == NULL) {
 			oxu_dbg(oxu, "no dummy td\n");
 			oxu->qh_used[i] = 0;
-			qh = NULL;
-			goto unlock;
+
+			return NULL;
 		}
 
 		oxu->qh_used[i] = 1;
 	}
-unlock:
+
 	spin_unlock(&oxu->mem_lock);
 
 	return qh;
@@ -687,6 +695,8 @@ static void oxu_murb_free(struct oxu_hcd *oxu, struct oxu_murb *murb)
 	oxu->murb_used[index] = 0;
 
 	spin_unlock(&oxu->mem_lock);
+
+	return;
 }
 
 static struct oxu_murb *oxu_murb_alloc(struct oxu_hcd *oxu)
@@ -1633,7 +1643,8 @@ static int submit_async(struct oxu_hcd	*oxu, struct urb *urb,
 #endif
 
 	spin_lock_irqsave(&oxu->lock, flags);
-	if (unlikely(!HCD_HW_ACCESSIBLE(oxu_to_hcd(oxu)))) {
+	if (unlikely(!test_bit(HCD_FLAG_HW_ACCESSIBLE,
+			       &oxu_to_hcd(oxu)->flags))) {
 		rc = -ESHUTDOWN;
 		goto done;
 	}
@@ -2200,7 +2211,8 @@ static int intr_submit(struct oxu_hcd *oxu, struct urb *urb,
 
 	spin_lock_irqsave(&oxu->lock, flags);
 
-	if (unlikely(!HCD_HW_ACCESSIBLE(oxu_to_hcd(oxu)))) {
+	if (unlikely(!test_bit(HCD_FLAG_HW_ACCESSIBLE,
+			       &oxu_to_hcd(oxu)->flags))) {
 		status = -ESHUTDOWN;
 		goto done;
 	}
@@ -2705,6 +2717,7 @@ static int oxu_run(struct usb_hcd *hcd)
 	u32 temp, hcc_params;
 
 	hcd->uses_new_polling = 1;
+	hcd->poll_rh = 0;
 
 	/* EHCI spec section 4.1 */
 	retval = ehci_reset(oxu);
@@ -2879,7 +2892,7 @@ static int oxu_urb_enqueue(struct usb_hcd *hcd, struct urb *urb,
 	/* Ok, we have more job to do! :) */
 
 	for (i = 0; i < num - 1; i++) {
-		/* Get free micro URB poll till a free urb is received */
+		/* Get free micro URB poll till a free urb is recieved */
 
 		do {
 			murb = (struct urb *) oxu_murb_alloc(oxu);
@@ -2911,7 +2924,7 @@ static int oxu_urb_enqueue(struct usb_hcd *hcd, struct urb *urb,
 
 	/* Last urb requires special handling  */
 
-	/* Get free micro URB poll till a free urb is received */
+	/* Get free micro URB poll till a free urb is recieved */
 	do {
 		murb = (struct urb *) oxu_murb_alloc(oxu);
 		if (!murb)
@@ -3062,6 +3075,7 @@ nogood:
 	ep->hcpriv = NULL;
 done:
 	spin_unlock_irqrestore(&oxu->lock, flags);
+	return;
 }
 
 static int oxu_get_frame(struct usb_hcd *hcd)
@@ -3094,7 +3108,7 @@ static int oxu_hub_status_data(struct usb_hcd *hcd, char *buf)
 
 	/* Some boards (mostly VIA?) report bogus overcurrent indications,
 	 * causing massive log spam unless we completely ignore them.  It
-	 * may be relevant that VIA VT8235 controllers, where PORT_POWER is
+	 * may be relevant that VIA VT8235 controlers, where PORT_POWER is
 	 * always set, seem to clear PORT_OCC and PORT_CSC when writing to
 	 * PORT_POWER; that's surprising, but maybe within-spec.
 	 */
@@ -3141,10 +3155,10 @@ static inline unsigned int oxu_port_speed(struct oxu_hcd *oxu,
 	case 0:
 		return 0;
 	case 1:
-		return USB_PORT_STAT_LOW_SPEED;
+		return 1 << USB_PORT_FEAT_LOWSPEED;
 	case 2:
 	default:
-		return USB_PORT_STAT_HIGH_SPEED;
+		return 1 << USB_PORT_FEAT_HIGHSPEED;
 	}
 }
 
@@ -3189,7 +3203,7 @@ static int oxu_hub_control(struct usb_hcd *hcd, u16 typeReq,
 		 * Even if OWNER is set, so the port is owned by the
 		 * companion controller, khubd needs to be able to clear
 		 * the port-change status bits (especially
-		 * USB_PORT_STAT_C_CONNECTION).
+		 * USB_PORT_FEAT_C_CONNECTION).
 		 */
 
 		switch (wValue) {
@@ -3251,11 +3265,11 @@ static int oxu_hub_control(struct usb_hcd *hcd, u16 typeReq,
 
 		/* wPortChange bits */
 		if (temp & PORT_CSC)
-			status |= USB_PORT_STAT_C_CONNECTION << 16;
+			status |= 1 << USB_PORT_FEAT_C_CONNECTION;
 		if (temp & PORT_PEC)
-			status |= USB_PORT_STAT_C_ENABLE << 16;
+			status |= 1 << USB_PORT_FEAT_C_ENABLE;
 		if ((temp & PORT_OCC) && !ignore_oc)
-			status |= USB_PORT_STAT_C_OVERCURRENT << 16;
+			status |= 1 << USB_PORT_FEAT_C_OVER_CURRENT;
 
 		/* whoever resumes must GetPortStatus to complete it!! */
 		if (temp & PORT_RESUME) {
@@ -3273,7 +3287,7 @@ static int oxu_hub_control(struct usb_hcd *hcd, u16 typeReq,
 			/* resume completed? */
 			else if (time_after_eq(jiffies,
 					oxu->reset_done[wIndex])) {
-				status |= USB_PORT_STAT_C_SUSPEND << 16;
+				status |= 1 << USB_PORT_FEAT_C_SUSPEND;
 				oxu->reset_done[wIndex] = 0;
 
 				/* stop resume signaling */
@@ -3296,7 +3310,7 @@ static int oxu_hub_control(struct usb_hcd *hcd, u16 typeReq,
 		if ((temp & PORT_RESET)
 				&& time_after_eq(jiffies,
 					oxu->reset_done[wIndex])) {
-			status |= USB_PORT_STAT_C_RESET << 16;
+			status |= 1 << USB_PORT_FEAT_C_RESET;
 			oxu->reset_done[wIndex] = 0;
 
 			/* force reset to complete */
@@ -3335,20 +3349,20 @@ static int oxu_hub_control(struct usb_hcd *hcd, u16 typeReq,
 		 */
 
 		if (temp & PORT_CONNECT) {
-			status |= USB_PORT_STAT_CONNECTION;
+			status |= 1 << USB_PORT_FEAT_CONNECTION;
 			/* status may be from integrated TT */
 			status |= oxu_port_speed(oxu, temp);
 		}
 		if (temp & PORT_PE)
-			status |= USB_PORT_STAT_ENABLE;
+			status |= 1 << USB_PORT_FEAT_ENABLE;
 		if (temp & (PORT_SUSPEND|PORT_RESUME))
-			status |= USB_PORT_STAT_SUSPEND;
+			status |= 1 << USB_PORT_FEAT_SUSPEND;
 		if (temp & PORT_OC)
-			status |= USB_PORT_STAT_OVERCURRENT;
+			status |= 1 << USB_PORT_FEAT_OVER_CURRENT;
 		if (temp & PORT_RESET)
-			status |= USB_PORT_STAT_RESET;
+			status |= 1 << USB_PORT_FEAT_RESET;
 		if (temp & PORT_POWER)
-			status |= USB_PORT_STAT_POWER;
+			status |= 1 << USB_PORT_FEAT_POWER;
 
 #ifndef	OXU_VERBOSE_DEBUG
 	if (status & ~0xffff)	/* only if wPortChange is interesting */
@@ -3687,7 +3701,7 @@ static void oxu_configuration(struct platform_device *pdev, void *base)
 static int oxu_verify_id(struct platform_device *pdev, void *base)
 {
 	u32 id;
-	static const char * const bo[] = {
+	char *bo[] = {
 		"reserved",
 		"128-pin LQFP",
 		"84-pin TFBGA",
@@ -3832,7 +3846,7 @@ static int oxu_drv_probe(struct platform_device *pdev)
 		return -EBUSY;
 	}
 
-	ret = irq_set_irq_type(irq, IRQF_TRIGGER_FALLING);
+	ret = set_irq_type(irq, IRQF_TRIGGER_FALLING);
 	if (ret) {
 		dev_err(&pdev->dev, "error setting irq type\n");
 		ret = -EFAULT;

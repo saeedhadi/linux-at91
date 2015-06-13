@@ -29,7 +29,9 @@
 
 #include <mach/board.h>
 #include <mach/gpio.h>
+#include <mach/at91sam9263.h>
 #include <mach/at91sam9_smc.h>
+#include <mach/at91sam9263_matrix.h>
 
 #define DRV_NAME "at91_ide"
 
@@ -172,19 +174,19 @@ static void at91_ide_output_data(ide_drive_t *drive, struct ide_cmd *cmd,
 	leave_16bit(chipselect, mode);
 }
 
-static void at91_ide_set_pio_mode(ide_hwif_t *hwif, ide_drive_t *drive)
+static void at91_ide_set_pio_mode(ide_drive_t *drive, const u8 pio)
 {
 	struct ide_timing *timing;
-	u8 chipselect = hwif->select_data;
+	u8 chipselect = drive->hwif->select_data;
 	int use_iordy = 0;
-	const u8 pio = drive->pio_mode - XFER_PIO_0;
 
 	pdbg("chipselect %u pio %u\n", chipselect, pio);
 
 	timing = ide_timing_find_mode(XFER_PIO_0 + pio);
 	BUG_ON(!timing);
 
-	if (ide_pio_need_iordy(drive, pio))
+	if ((pio > 2 || ata_id_has_iordy(drive->id)) &&
+	    !(ata_id_is_cfa(drive->id) && pio > 4))
 		use_iordy = 1;
 
 	apply_timings(chipselect, pio, timing, use_iordy);
@@ -214,7 +216,6 @@ static const struct ide_port_info at91_ide_port_info __initdata = {
 	.host_flags 	= IDE_HFLAG_MMIO | IDE_HFLAG_NO_DMA | IDE_HFLAG_SINGLE |
 			  IDE_HFLAG_NO_IO_32BIT | IDE_HFLAG_UNMASK_IRQS,
 	.pio_mask 	= ATA_PIO6,
-	.chipset	= ide_generic,
 };
 
 /*
@@ -245,7 +246,8 @@ irqreturn_t at91_irq_handler(int irq, void *dev_id)
 static int __init at91_ide_probe(struct platform_device *pdev)
 {
 	int ret;
-	struct ide_hw hw, *hws[] = { &hw };
+	hw_regs_t hw;
+	hw_regs_t *hws[] = { &hw, NULL, NULL, NULL };
 	struct ide_host *host;
 	struct resource *res;
 	unsigned long tf_base = 0, ctl_base = 0;
@@ -302,9 +304,10 @@ static int __init at91_ide_probe(struct platform_device *pdev)
 		ide_std_init_ports(&hw, tf_base, ctl_base + 6);
 
 	hw.irq = board->irq_pin;
+	hw.chipset = ide_generic;
 	hw.dev = &pdev->dev;
 
-	host = ide_host_alloc(&at91_ide_port_info, hws, 1);
+	host = ide_host_alloc(&at91_ide_port_info, hws);
 	if (!host) {
 		perr("failed to allocate ide host\n");
 		return -ENOMEM;

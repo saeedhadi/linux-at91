@@ -23,11 +23,11 @@
 #include <linux/pci.h>
 #include <linux/string.h>
 #include <linux/init.h>
-#include <linux/gfp.h>
 
 #include <asm/io.h>
 #include <asm/prom.h>
 #include <asm/pci-bridge.h>
+#include <asm/pSeries_reconfig.h>
 #include <asm/ppc-pci.h>
 #include <asm/firmware.h>
 
@@ -35,7 +35,7 @@
  * Traverse_func that inits the PCI fields of the device node.
  * NOTE: this *must* be done before read/write config to the device.
  */
-void * __devinit update_dn_pci_info(struct device_node *dn, void *data)
+static void * __devinit update_dn_pci_info(struct device_node *dn, void *data)
 {
 	struct pci_controller *phb = data;
 	const int *type =
@@ -161,7 +161,7 @@ static void *is_devfn_node(struct device_node *dn, void *data)
 /*
  * This is the "slow" path for looking up a device_node from a
  * pci_dev.  It will hunt for the device under its parent's
- * phb and then update of_node pointer.
+ * phb and then update sysdata for a future fastpath.
  *
  * It may also do fixups on the actual device since this happens
  * on the first read/write.
@@ -170,25 +170,42 @@ static void *is_devfn_node(struct device_node *dn, void *data)
  * In this case it may probe for real hardware ("just in case")
  * and add a device_node to the device tree if necessary.
  *
- * Is this function necessary anymore now that dev->dev.of_node is
- * used to store the node pointer?
- *
  */
 struct device_node *fetch_dev_dn(struct pci_dev *dev)
 {
-	struct pci_controller *phb = dev->sysdata;
+	struct device_node *orig_dn = dev->sysdata;
 	struct device_node *dn;
 	unsigned long searchval = (dev->bus->number << 8) | dev->devfn;
 
-	if (WARN_ON(!phb))
-		return NULL;
-
-	dn = traverse_pci_devices(phb->dn, is_devfn_node, (void *)searchval);
+	dn = traverse_pci_devices(orig_dn, is_devfn_node, (void *)searchval);
 	if (dn)
-		dev->dev.of_node = dn;
+		dev->sysdata = dn;
 	return dn;
 }
 EXPORT_SYMBOL(fetch_dev_dn);
+
+static int pci_dn_reconfig_notifier(struct notifier_block *nb, unsigned long action, void *node)
+{
+	struct device_node *np = node;
+	struct pci_dn *pci = NULL;
+	int err = NOTIFY_OK;
+
+	switch (action) {
+	case PSERIES_RECONFIG_ADD:
+		pci = np->parent->data;
+		if (pci)
+			update_dn_pci_info(np, pci->phb);
+		break;
+	default:
+		err = NOTIFY_DONE;
+		break;
+	}
+	return err;
+}
+
+static struct notifier_block pci_dn_reconfig_nb = {
+	.notifier_call = pci_dn_reconfig_notifier,
+};
 
 /** 
  * pci_devs_phb_init - Initialize phbs and pci devs under them.
@@ -206,4 +223,6 @@ void __init pci_devs_phb_init(void)
 	/* This must be done first so the device nodes have valid pci info! */
 	list_for_each_entry_safe(phb, tmp, &hose_list, list_node)
 		pci_devs_phb_init_dynamic(phb);
+
+	pSeries_reconfig_notifier_register(&pci_dn_reconfig_nb);
 }

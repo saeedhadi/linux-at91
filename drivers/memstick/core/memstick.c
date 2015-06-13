@@ -16,7 +16,6 @@
 #include <linux/idr.h>
 #include <linux/fs.h>
 #include <linux/delay.h>
-#include <linux/slab.h>
 
 #define DRIVER_NAME "memstick"
 
@@ -340,9 +339,9 @@ static int h_memstick_read_dev_id(struct memstick_dev *card,
 			card->id.type = id_reg.type;
 			card->id.category = id_reg.category;
 			card->id.class = id_reg.class;
-			dev_dbg(&card->dev, "if_mode = %02x\n", id_reg.if_mode);
 		}
 		complete(&card->mrq_complete);
+		dev_dbg(&card->dev, "if_mode = %02x\n", id_reg.if_mode);
 		return -EAGAIN;
 	}
 }
@@ -465,7 +464,6 @@ static void memstick_check(struct work_struct *work)
 		if (!host->card) {
 			host->card = card;
 			if (device_register(&card->dev)) {
-				put_device(&card->dev);
 				kfree(host->card);
 				host->card = NULL;
 			}
@@ -511,18 +509,14 @@ int memstick_add_host(struct memstick_host *host)
 {
 	int rc;
 
-	while (1) {
-		if (!idr_pre_get(&memstick_host_idr, GFP_KERNEL))
-			return -ENOMEM;
+	if (!idr_pre_get(&memstick_host_idr, GFP_KERNEL))
+		return -ENOMEM;
 
-		spin_lock(&memstick_host_lock);
-		rc = idr_get_new(&memstick_host_idr, host, &host->id);
-		spin_unlock(&memstick_host_lock);
-		if (!rc)
-			break;
-		else if (rc != -EAGAIN)
-			return rc;
-	}
+	spin_lock(&memstick_host_lock);
+	rc = idr_get_new(&memstick_host_idr, host, &host->id);
+	spin_unlock(&memstick_host_lock);
+	if (rc)
+		return rc;
 
 	dev_set_name(&host->dev, "memstick%u", host->id);
 
@@ -621,7 +615,7 @@ static int __init memstick_init(void)
 {
 	int rc;
 
-	workqueue = create_freezable_workqueue("kmemstick");
+	workqueue = create_freezeable_workqueue("kmemstick");
 	if (!workqueue)
 		return -ENOMEM;
 

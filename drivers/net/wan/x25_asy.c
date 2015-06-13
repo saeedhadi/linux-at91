@@ -29,13 +29,13 @@
 #include <linux/etherdevice.h>
 #include <linux/skbuff.h>
 #include <linux/if_arp.h>
+#include <linux/x25.h>
 #include <linux/lapb.h>
 #include <linux/init.h>
 #include <linux/rtnetlink.h>
-#include <linux/compat.h>
-#include <linux/slab.h>
-#include <net/x25device.h>
 #include "x25_asy.h"
+
+#include <net/x25device.h>
 
 static struct net_device **x25_asy_devs;
 static int x25_asy_maxdev = SL_NRUNIT;
@@ -299,8 +299,7 @@ static void x25_asy_timeout(struct net_device *dev)
 
 /* Encapsulate an IP datagram and kick it into a TTY queue. */
 
-static netdev_tx_t x25_asy_xmit(struct sk_buff *skb,
-				      struct net_device *dev)
+static int x25_asy_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct x25_asy *sl = netdev_priv(dev);
 	int err;
@@ -309,25 +308,25 @@ static netdev_tx_t x25_asy_xmit(struct sk_buff *skb,
 		printk(KERN_ERR "%s: xmit call when iface is down\n",
 			dev->name);
 		kfree_skb(skb);
-		return NETDEV_TX_OK;
+		return 0;
 	}
 
 	switch (skb->data[0]) {
-	case X25_IFACE_DATA:
+	case 0x00:
 		break;
-	case X25_IFACE_CONNECT: /* Connection request .. do nothing */
+	case 0x01: /* Connection request .. do nothing */
 		err = lapb_connect_request(dev);
 		if (err != LAPB_OK)
 			printk(KERN_ERR "x25_asy: lapb_connect_request error - %d\n", err);
 		kfree_skb(skb);
-		return NETDEV_TX_OK;
-	case X25_IFACE_DISCONNECT: /* do nothing - hang up ?? */
+		return 0;
+	case 0x02: /* Disconnect request .. do nothing - hang up ?? */
 		err = lapb_disconnect_request(dev);
 		if (err != LAPB_OK)
 			printk(KERN_ERR "x25_asy: lapb_disconnect_request error - %d\n", err);
 	default:
 		kfree_skb(skb);
-		return NETDEV_TX_OK;
+		return  0;
 	}
 	skb_pull(skb, 1);	/* Remove control byte */
 	/*
@@ -345,9 +344,9 @@ static netdev_tx_t x25_asy_xmit(struct sk_buff *skb,
 	if (err != LAPB_OK) {
 		printk(KERN_ERR "x25_asy: lapb_data_request error - %d\n", err);
 		kfree_skb(skb);
-		return NETDEV_TX_OK;
+		return 0;
 	}
-	return NETDEV_TX_OK;
+	return 0;
 }
 
 
@@ -409,7 +408,7 @@ static void x25_asy_connected(struct net_device *dev, int reason)
 	}
 
 	ptr  = skb_put(skb, 1);
-	*ptr = X25_IFACE_CONNECT;
+	*ptr = 0x01;
 
 	skb->protocol = x25_type_trans(skb, sl->dev);
 	netif_rx(skb);
@@ -428,7 +427,7 @@ static void x25_asy_disconnected(struct net_device *dev, int reason)
 	}
 
 	ptr  = skb_put(skb, 1);
-	*ptr = X25_IFACE_DISCONNECT;
+	*ptr = 0x02;
 
 	skb->protocol = x25_type_trans(skb, sl->dev);
 	netif_rx(skb);
@@ -498,6 +497,7 @@ norbuff:
 static int x25_asy_close(struct net_device *dev)
 {
 	struct x25_asy *sl = netdev_priv(dev);
+	int err;
 
 	spin_lock(&sl->lock);
 	if (sl->tty)
@@ -506,6 +506,10 @@ static int x25_asy_close(struct net_device *dev)
 	netif_stop_queue(dev);
 	sl->rcount = 0;
 	sl->xleft  = 0;
+	err = lapb_unregister(dev);
+	if (err != LAPB_OK)
+		printk(KERN_ERR "x25_asy_close: lapb_unregister error -%d\n",
+			err);
 	spin_unlock(&sl->lock);
 	return 0;
 }
@@ -577,7 +581,7 @@ static int x25_asy_open_tty(struct tty_struct *tty)
 	if (err)
 		return err;
 	/* Done.  We have linked the TTY line to a channel. */
-	return 0;
+	return sl->dev->base_addr;
 }
 
 
@@ -590,7 +594,6 @@ static int x25_asy_open_tty(struct tty_struct *tty)
 static void x25_asy_close_tty(struct tty_struct *tty)
 {
 	struct x25_asy *sl = tty->disc_data;
-	int err;
 
 	/* First make sure we're connected. */
 	if (!sl || sl->magic != X25_ASY_MAGIC)
@@ -600,11 +603,6 @@ static void x25_asy_close_tty(struct tty_struct *tty)
 	if (sl->dev->flags & IFF_UP)
 		dev_close(sl->dev);
 	rtnl_unlock();
-
-	err = lapb_unregister(sl->dev);
-	if (err != LAPB_OK)
-		printk(KERN_ERR "x25_asy_close: lapb_unregister error -%d\n",
-			err);
 
 	tty->disc_data = NULL;
 	sl->tty = NULL;
@@ -649,7 +647,7 @@ static int x25_asy_esc(unsigned char *s, unsigned char *d, int len)
 		}
 	}
 	*ptr++ = X25_END;
-	return ptr - d;
+	return (ptr - d);
 }
 
 static void x25_asy_unesc(struct x25_asy *sl, unsigned char s)
@@ -657,8 +655,8 @@ static void x25_asy_unesc(struct x25_asy *sl, unsigned char s)
 
 	switch (s) {
 	case X25_END:
-		if (!test_and_clear_bit(SLF_ERROR, &sl->flags) &&
-		    sl->rcount > 2)
+		if (!test_and_clear_bit(SLF_ERROR, &sl->flags)
+			&& sl->rcount > 2)
 			x25_asy_bump(sl);
 		clear_bit(SLF_ESCAPE, &sl->flags);
 		sl->rcount = 0;
@@ -705,21 +703,6 @@ static int x25_asy_ioctl(struct tty_struct *tty, struct file *file,
 		return tty_mode_ioctl(tty, file, cmd, arg);
 	}
 }
-
-#ifdef CONFIG_COMPAT
-static long x25_asy_compat_ioctl(struct tty_struct *tty, struct file *file,
-			 unsigned int cmd,  unsigned long arg)
-{
-	switch (cmd) {
-	case SIOCGIFNAME:
-	case SIOCSIFHWADDR:
-		return x25_asy_ioctl(tty, file, cmd,
-				     (unsigned long)compat_ptr(arg));
-	}
-
-	return -ENOIOCTLCMD;
-}
-#endif
 
 static int x25_asy_open_dev(struct net_device *dev)
 {
@@ -770,9 +753,6 @@ static struct tty_ldisc_ops x25_ldisc = {
 	.open		= x25_asy_open_tty,
 	.close		= x25_asy_close_tty,
 	.ioctl		= x25_asy_ioctl,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl	= x25_asy_compat_ioctl,
-#endif
 	.receive_buf	= x25_asy_receive_buf,
 	.write_wakeup	= x25_asy_write_wakeup,
 };

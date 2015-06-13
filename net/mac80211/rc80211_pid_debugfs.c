@@ -6,13 +6,11 @@
  * published by the Free Software Foundation.
  */
 
-#include <linux/sched.h>
 #include <linux/spinlock.h>
 #include <linux/poll.h>
 #include <linux/netdevice.h>
 #include <linux/types.h>
 #include <linux/skbuff.h>
-#include <linux/slab.h>
 
 #include <net/mac80211.h>
 #include "rate.h"
@@ -162,7 +160,7 @@ static ssize_t rate_control_pid_events_read(struct file *file, char __user *buf,
 	file_info->next_entry = (file_info->next_entry + 1) %
 				RC_PID_EVENT_RING_SIZE;
 
-	/* Print information about the event. Note that userspace needs to
+	/* Print information about the event. Note that userpace needs to
 	 * provide large enough buffers. */
 	length = length < RC_PID_PRINT_BUF_SIZE ?
 		 length : RC_PID_PRINT_BUF_SIZE;
@@ -200,13 +198,12 @@ static ssize_t rate_control_pid_events_read(struct file *file, char __user *buf,
 
 #undef RC_PID_PRINT_BUF_SIZE
 
-static const struct file_operations rc_pid_fop_events = {
+static struct file_operations rc_pid_fop_events = {
 	.owner = THIS_MODULE,
 	.read = rate_control_pid_events_read,
 	.poll = rate_control_pid_events_poll,
 	.open = rate_control_pid_events_open,
 	.release = rate_control_pid_events_release,
-	.llseek = noop_llseek,
 };
 
 void rate_control_pid_add_sta_debugfs(void *priv, void *priv_sta,

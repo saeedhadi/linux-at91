@@ -19,8 +19,6 @@
  */
 
 #include <linux/bug.h>
-#include <linux/init.h>
-#include <linux/kernel.h>
 #include <asm/paravirt.h>
 
 #define DECLARE(name)						\

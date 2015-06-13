@@ -21,8 +21,6 @@ static inline u32 sdram_selfrefresh_enable(void)
 }
 
 #define sdram_selfrefresh_disable(saved_lpr)	at91_sys_write(AT91_SDRAMC_LPR, saved_lpr)
-#define wait_for_interrupt_enable()		asm volatile ("mcr p15, 0, %0, c7, c0, 4" \
-								: : "r" (0))
 
 #elif defined(CONFIG_ARCH_AT91CAP9)
 #include <mach/at91cap9_ddrsdr.h>
@@ -40,7 +38,6 @@ static inline u32 sdram_selfrefresh_enable(void)
 }
 
 #define sdram_selfrefresh_disable(saved_lpr)	at91_ramc_write(0, AT91_DDRSDRC_LPR, saved_lpr)
-#define wait_for_interrupt_enable()		cpu_do_idle()
 
 #elif defined(CONFIG_ARCH_AT91SAM9G45)
 #include <mach/at91sam9_ddrsdr.h>
@@ -77,46 +74,6 @@ static inline u32 sdram_selfrefresh_enable(void)
 		at91_ramc_write(0, AT91_DDRSDRC_LPR, saved_lpr0); \
 		at91_ramc_write(1, AT91_DDRSDRC_LPR, saved_lpr1); \
 	} while (0)
-#define wait_for_interrupt_enable()		cpu_do_idle()
-
-#elif defined(CONFIG_ARCH_AT91SAM9X5)
-#include <mach/at91sam9_ddrsdr.h>
-
-static inline u32 sdram_selfrefresh_enable(void)
-{
-	u32 lpr, saved_lpr;
-
-	saved_lpr = at91_ramc_read(0, AT91_DDRSDRC_LPR);
-	lpr = saved_lpr & ~AT91_DDRSDRC_LPCB;
-	lpr |= AT91_DDRSDRC_LPCB_SELF_REFRESH;
-
-	at91_ramc_write(0, AT91_DDRSDRC_LPR, lpr);
-
-	return saved_lpr;
-}
-
-#define sdram_selfrefresh_disable(saved_lpr)	at91_ramc_write(0, AT91_DDRSDRC_LPR, saved_lpr)
-#define wait_for_interrupt_enable()		cpu_do_idle()
-
-#elif defined(CONFIG_ARCH_AT91SAM9N12)
-#include <mach/at91sam9_ddrsdr.h>
-
-static inline u32 sdram_selfrefresh_enable(void)
-{
-	u32 lpr, saved_lpr;
-
-	saved_lpr = at91_ramc_read(0, AT91_DDRSDRC_LPR);
-	lpr = saved_lpr & ~AT91_DDRSDRC_LPCB;
-	lpr |= AT91_DDRSDRC_LPCB_SELF_REFRESH;
-
-	at91_ramc_write(0, AT91_DDRSDRC_LPR, lpr);
-
-	return saved_lpr;
-}
-
-#define sdram_selfrefresh_disable(saved_lpr) \
-	at91_ramc_write(0, AT91_DDRSDRC_LPR, saved_lpr)
-#define wait_for_interrupt_enable()		cpu_do_idle()
 
 #else
 #include <mach/at91sam9_sdramc.h>
@@ -141,6 +98,5 @@ static inline u32 sdram_selfrefresh_enable(void)
 }
 
 #define sdram_selfrefresh_disable(saved_lpr)	at91_ramc_write(0, AT91_SDRAMC_LPR, saved_lpr)
-#define wait_for_interrupt_enable()		cpu_do_idle()
 
 #endif

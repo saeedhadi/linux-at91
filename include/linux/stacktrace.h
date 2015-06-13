@@ -2,11 +2,8 @@
 #define __LINUX_STACKTRACE_H
 
 struct task_struct;
-struct pt_regs;
 
 #ifdef CONFIG_STACKTRACE
-struct task_struct;
-
 struct stack_trace {
 	unsigned int nr_entries, max_entries;
 	unsigned long *entries;
@@ -14,8 +11,6 @@ struct stack_trace {
 };
 
 extern void save_stack_trace(struct stack_trace *trace);
-extern void save_stack_trace_regs(struct stack_trace *trace,
-				  struct pt_regs *regs);
 extern void save_stack_trace_tsk(struct task_struct *tsk,
 				struct stack_trace *trace);
 

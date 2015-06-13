@@ -17,7 +17,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/slab.h>
 #include <linux/init.h>
 #include "hisax.h"
 #include <linux/isdn/capicmd.h>
@@ -65,7 +64,7 @@ hisax_findcard(int driverid)
 	return (struct IsdnCardState *) 0;
 }
 
-static __attribute__((format(printf, 3, 4))) void
+static void
 link_debug(struct Channel *chanp, int direction, char *fmt, ...)
 {
 	va_list args;
@@ -834,6 +833,8 @@ static struct FsmNode fnlist[] __initdata =
 };
 /* *INDENT-ON* */
 
+#define FNCOUNT (sizeof(fnlist)/sizeof(struct FsmNode))
+
 int __init
 CallcNew(void)
 {
@@ -841,7 +842,7 @@ CallcNew(void)
 	callcfsm.event_count = EVENT_COUNT;
 	callcfsm.strEvent = strEvent;
 	callcfsm.strState = strState;
-	return FsmNew(&callcfsm, fnlist, ARRAY_SIZE(fnlist));
+	return FsmNew(&callcfsm, fnlist, FNCOUNT);
 }
 
 void
@@ -1068,7 +1069,7 @@ init_d_st(struct Channel *chanp)
 	return 0;
 }
 
-static __attribute__((format(printf, 2, 3))) void
+static void
 callc_debug(struct FsmInst *fi, char *fmt, ...)
 {
 	va_list args;
@@ -1172,7 +1173,7 @@ CallcFreeChan(struct IsdnCardState *csta)
 			kfree(csta->channel[i].b_st);
 			csta->channel[i].b_st = NULL;
 		} else
-			printk(KERN_WARNING "CallcFreeChan b_st ch%d already freed\n", i);
+			printk(KERN_WARNING "CallcFreeChan b_st ch%d allready freed\n", i);
 		if (i || test_bit(FLG_TWO_DCHAN, &csta->HW_Flags)) {
 			release_d_st(csta->channel + i);
 		} else

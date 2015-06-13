@@ -22,8 +22,7 @@
 #include <linux/elf.h>
 #include <linux/security.h>
 #include <linux/bootmem.h>
-#include <linux/compat.h>
-#include <asm/asm-offsets.h>
+
 #include <asm/pgtable.h>
 #include <asm/system.h>
 #include <asm/processor.h>
@@ -54,19 +53,8 @@ unsigned int __read_mostly vdso_enabled = 1;
 
 static int __init vdso_setup(char *s)
 {
-	unsigned long val;
-	int rc;
-
-	rc = 0;
-	if (strncmp(s, "on", 3) == 0)
-		vdso_enabled = 1;
-	else if (strncmp(s, "off", 4) == 0)
-		vdso_enabled = 0;
-	else {
-		rc = strict_strtoul(s, 0, &val);
-		vdso_enabled = rc ? 0 : !!val;
-	}
-	return !rc;
+	vdso_enabled = simple_strtoul(s, NULL, 0);
+	return 1;
 }
 __setup("vdso=", vdso_setup);
 
@@ -76,7 +64,7 @@ __setup("vdso=", vdso_setup);
 static union {
 	struct vdso_data	data;
 	u8			page[PAGE_SIZE];
-} vdso_data_store __page_aligned_data;
+} vdso_data_store __attribute__((__section__(".data.page_aligned")));
 struct vdso_data *vdso_data = &vdso_data_store.data;
 
 /*
@@ -84,7 +72,10 @@ struct vdso_data *vdso_data = &vdso_data_store.data;
  */
 static void vdso_init_data(struct vdso_data *vd)
 {
-	vd->ectg_available = user_mode != HOME_SPACE_MODE && test_facility(31);
+	unsigned int facility_list;
+
+	facility_list = stfl();
+	vd->ectg_available = switch_amode && (facility_list & 1);
 }
 
 #ifdef CONFIG_64BIT
@@ -98,7 +89,11 @@ static void vdso_init_per_cpu_data(int cpu, struct vdso_per_cpu_data *vpcd)
 /*
  * Allocate/free per cpu vdso data.
  */
+#ifdef CONFIG_64BIT
 #define SEGMENT_ORDER	2
+#else
+#define SEGMENT_ORDER	1
+#endif
 
 int vdso_alloc_per_cpu(int cpu, struct _lowcore *lowcore)
 {
@@ -108,7 +103,7 @@ int vdso_alloc_per_cpu(int cpu, struct _lowcore *lowcore)
 
 	lowcore->vdso_per_cpu_data = __LC_PASTE;
 
-	if (user_mode == HOME_SPACE_MODE || !vdso_enabled)
+	if (!switch_amode || !vdso_enabled)
 		return 0;
 
 	segment_table = __get_free_pages(GFP_KERNEL, SEGMENT_ORDER);
@@ -154,7 +149,7 @@ void vdso_free_per_cpu(int cpu, struct _lowcore *lowcore)
 	unsigned long segment_table, page_table, page_frame;
 	u32 *psal, *aste;
 
-	if (user_mode == HOME_SPACE_MODE || !vdso_enabled)
+	if (!switch_amode || !vdso_enabled)
 		return;
 
 	psal = (u32 *)(addr_t) lowcore->paste[4];
@@ -178,7 +173,7 @@ static void __vdso_init_cr5(void *dummy)
 
 static void vdso_init_cr5(void)
 {
-	if (user_mode != HOME_SPACE_MODE && vdso_enabled)
+	if (switch_amode && vdso_enabled)
 		on_each_cpu(__vdso_init_cr5, NULL, 1);
 }
 #endif /* CONFIG_64BIT */
@@ -203,11 +198,12 @@ int arch_setup_additional_pages(struct linux_binprm *bprm, int uses_interp)
 	if (!uses_interp)
 		return 0;
 
+	vdso_base = mm->mmap_base;
 #ifdef CONFIG_64BIT
 	vdso_pagelist = vdso64_pagelist;
 	vdso_pages = vdso64_pages;
 #ifdef CONFIG_COMPAT
-	if (is_compat_task()) {
+	if (test_thread_flag(TIF_31BIT)) {
 		vdso_pagelist = vdso32_pagelist;
 		vdso_pages = vdso32_pages;
 	}
@@ -232,18 +228,12 @@ int arch_setup_additional_pages(struct linux_binprm *bprm, int uses_interp)
 	 * fail and end up putting it elsewhere.
 	 */
 	down_write(&mm->mmap_sem);
-	vdso_base = get_unmapped_area(NULL, 0, vdso_pages << PAGE_SHIFT, 0, 0);
+	vdso_base = get_unmapped_area(NULL, vdso_base,
+				      vdso_pages << PAGE_SHIFT, 0, 0);
 	if (IS_ERR_VALUE(vdso_base)) {
 		rc = vdso_base;
 		goto out_up;
 	}
-
-	/*
-	 * Put vDSO base into mm struct. We need to do this before calling
-	 * install_special_mapping or the perf counter mmap tracking code
-	 * will fail to recognise it as a vDSO (since arch_vma_name fails).
-	 */
-	current->mm->context.vdso_base = vdso_base;
 
 	/*
 	 * our vma flags don't have VM_WRITE so by default, the process
@@ -266,7 +256,14 @@ int arch_setup_additional_pages(struct linux_binprm *bprm, int uses_interp)
 				     VM_ALWAYSDUMP,
 				     vdso_pagelist);
 	if (rc)
-		current->mm->context.vdso_base = 0;
+		goto out_up;
+
+	/* Put vDSO base into mm struct */
+	current->mm->context.vdso_base = vdso_base;
+
+	up_write(&mm->mmap_sem);
+	return 0;
+
 out_up:
 	up_write(&mm->mmap_sem);
 	return rc;
@@ -337,17 +334,17 @@ static int __init vdso_init(void)
 }
 arch_initcall(vdso_init);
 
-int in_gate_area_no_mm(unsigned long addr)
+int in_gate_area_no_task(unsigned long addr)
 {
 	return 0;
 }
 
-int in_gate_area(struct mm_struct *mm, unsigned long addr)
+int in_gate_area(struct task_struct *task, unsigned long addr)
 {
 	return 0;
 }
 
-struct vm_area_struct *get_gate_vma(struct mm_struct *mm)
+struct vm_area_struct *get_gate_vma(struct task_struct *tsk)
 {
 	return NULL;
 }

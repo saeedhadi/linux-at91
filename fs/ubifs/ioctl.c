@@ -25,6 +25,7 @@
 /* This file implements EXT2-compatible extended attribute ioctl() calls */
 
 #include <linux/compat.h>
+#include <linux/smp_lock.h>
 #include <linux/mount.h>
 #include "ubifs.h"
 
@@ -160,7 +161,7 @@ long ubifs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		if (IS_RDONLY(inode))
 			return -EROFS;
 
-		if (!inode_owner_or_capable(inode))
+		if (!is_owner_or_cap(inode))
 			return -EACCES;
 
 		if (get_user(flags, (int __user *) arg))

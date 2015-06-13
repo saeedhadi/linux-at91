@@ -24,7 +24,6 @@
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/module.h>
-#include <linux/mtd/nand.h>
 #include <linux/platform_device.h>
 #include <linux/spi/spi.h>
 #include <linux/gpio_keys.h>
@@ -54,7 +53,7 @@ static void __init ek_map_io(void)
 	/* Initialize processor: 12.000 MHz crystal */
 	at91sam9260_initialize(12000000);
 
-	/* DBGU on ttyS0. (Rx & Tx only) */
+	/* DGBU on ttyS0. (Rx & Tx only) */
 	at91_register_uart(0, 0, 0);
 
 	/* set serial console to ttyS0 (ie, DBGU) */
@@ -123,7 +122,6 @@ static struct atmel_nand_data __initdata ek_nand_data = {
 //	.det_pin	= ... not connected
 	.rdy_pin	= AT91_PIN_PC13,
 	.enable_pin	= AT91_PIN_PC14,
-	.ecc_mode	= NAND_ECC_SOFT,
 	.partition_info	= nand_partitions,
 };
 
@@ -230,6 +228,8 @@ static void __init ek_board_init(void)
 
 MACHINE_START(USB_A9260, "CALAO USB_A9260")
 	/* Maintainer: calao-systems */
+	.phys_io	= AT91_BASE_SYS,
+	.io_pg_offst	= (AT91_VA_BASE_SYS >> 18) & 0xfffc,
 	.boot_params	= AT91_SDRAM_BASE + 0x100,
 	.timer		= &at91sam926x_timer,
 	.map_io		= ek_map_io,

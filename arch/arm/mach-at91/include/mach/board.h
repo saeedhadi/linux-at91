@@ -39,13 +39,10 @@
 #include <linux/usb/atmel_usba_udc.h>
 #include <linux/atmel-mci.h>
 #include <sound/atmel-ac97c.h>
-#include <linux/serial.h>
 
  /* USB Device */
 struct at91_udc_data {
 	u8	vbus_pin;		/* high == host powering us */
-	u8	vbus_active_low;	/* vbus polarity */
-	u8	vbus_polled;		/* Use polling, not interrupt */
 	u8	pullup_pin;		/* active == D+ pulled up */
 	u8	pullup_active_low;	/* true == pullup_pin is active low */
 };
@@ -87,21 +84,17 @@ struct at91_eth_data {
 	u8		phy_irq_pin;	/* PHY IRQ */
 	u8		is_rmii;	/* using RMII interface? */
 };
-#if defined(CONFIG_ARCH_AT91SAM9X5)
-extern void __init at91_add_device_eth(short eth_id, struct at91_eth_data *data);
-#else
 extern void __init at91_add_device_eth(struct at91_eth_data *data);
-#endif
 
 #if defined(CONFIG_ARCH_AT91SAM9260) || defined(CONFIG_ARCH_AT91SAM9263) || defined(CONFIG_ARCH_AT91SAM9G20) || defined(CONFIG_ARCH_AT91CAP9) \
-	|| defined(CONFIG_ARCH_AT91SAM9G45) || defined(CONFIG_ARCH_AT91SAM9X5) || defined(CONFIG_ARCH_AT572D940HF)
+	|| defined(CONFIG_ARCH_AT91SAM9G45) || defined(CONFIG_ARCH_AT91SAM9M10) || defined(CONFIG_ARCH_AT572D940HF)
 #define eth_platform_data	at91_eth_data
 #endif
 
  /* USB Host */
 struct at91_usbh_data {
 	u8		ports;		/* number of ports on root hub */
-	u8		vbus_pin[3];	/* port power-control pin */
+	u8		vbus_pin[2];	/* port power-control pin */
 };
 extern void __init at91_add_device_usbh(struct at91_usbh_data *data);
 extern void __init at91_add_device_usbh_ohci(struct at91_usbh_data *data);
@@ -116,19 +109,12 @@ struct atmel_nand_data {
 	u8		ale;		/* address line number connected to ALE */
 	u8		cle;		/* address line number connected to CLE */
 	u8		bus_width_16;	/* buswidth is 16 bit */
-	u8		bus_on_d0;	/* pins of data bus are connected to D0~D15 */
-	u8		ecc_mode;	/* can be NAND_ECC_HW/SOFT/NONE */
-	bool		has_pmecc;	/* use pmecc or not */
-	u8		pmecc_corr_cap;	/* pmecc ecc bits, can be 2, 4, 8, 12, 24 */
-	u16		pmecc_sector_size;	/* can be 512 or 1024 */
-	u32		pmecc_lookup_table_offset;	/* offset in ROM */
 	struct mtd_partition* (*partition_info)(int, int*);
 };
 extern void __init at91_add_device_nand(struct atmel_nand_data *data);
 
  /* I2C*/
-#if	defined(CONFIG_ARCH_AT91SAM9G45) || defined(CONFIG_ARCH_AT91SAM9X5) || \
-	defined(CONFIG_ARCH_AT91SAM9N12)
+#if defined(CONFIG_ARCH_AT91SAM9G45) || defined(CONFIG_ARCH_AT91SAM9M10)
 extern void __init at91_add_device_i2c(short i2c_id, struct i2c_board_info *devices, int nr_devices);
 #else
 extern void __init at91_add_device_i2c(struct i2c_board_info *devices, int nr_devices);
@@ -148,17 +134,18 @@ extern void __init at91_add_device_spi(struct spi_board_info *devices, int nr_de
 extern void __init at91_register_uart(unsigned id, unsigned portnr, unsigned pins);
 extern void __init at91_set_serial_console(unsigned portnr);
 
+struct at91_uart_config {
+	unsigned short	console_tty;	/* tty number of serial console */
+	unsigned short	nr_tty;		/* number of serial tty's */
+	short		tty_map[];	/* map UART to tty number */
+};
 extern struct platform_device *atmel_default_console_device;
+extern void __init __deprecated at91_init_serial(struct at91_uart_config *config);
 
 struct atmel_uart_data {
-	short			use_dma_tx;	/* use transmit DMA? */
-	short			use_dma_rx;	/* use receive DMA? */
-	short			cts;		/* use cts */
-	short			rts;		/* use rts */
-	void __iomem		*regs;		/* virt. base address, if any */
-	struct at_dma_slave	*dma_tx_slave;
-	struct at_dma_slave	*dma_rx_slave;
-	struct serial_rs485	rs485;		/* rs485 settings */
+	short		use_dma_tx;	/* use transmit DMA? */
+	short		use_dma_rx;	/* use receive DMA? */
+	void __iomem	*regs;		/* virtual base address, if any */
 };
 extern void __init at91_add_device_serial(void);
 
@@ -197,31 +184,15 @@ extern void __init at91_add_device_lcdc(struct atmel_lcdfb_info *data);
 extern void __init at91_add_device_ac97(struct ac97c_platform_data *data);
 
  /* ISI */
-struct isi_platform_data;
-extern void __init at91_add_device_isi(struct isi_platform_data *data);
+extern void __init at91_add_device_isi(void);
 
  /* Touchscreen Controller */
 struct at91_tsadcc_data {
 	unsigned int    adc_clock;
-	u8		filtering_average;
 	u8		pendet_debounce;
-	u8		pendet_sensitivity;
 	u8		ts_sample_hold_time;
 };
 extern void __init at91_add_device_tsadcc(struct at91_tsadcc_data *data);
-
-/* CAN */
-struct at91_can_data {
-	void (*transceiver_switch)(int on);
-};
-#ifdef CONFIG_ARCH_AT91SAM9X5
-extern void __init at91_add_device_can(int id, struct at91_can_data *data);
-#else
-extern void __init at91_add_device_can(struct at91_can_data *data);
-#endif
-
- /* SMD */
-extern void __init at91_add_device_smd(void);
 
  /* LEDs */
 extern void __init at91_init_leds(u8 cpu_led, u8 timer_led);

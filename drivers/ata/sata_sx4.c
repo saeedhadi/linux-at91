@@ -81,7 +81,6 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/pci.h>
-#include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/blkdev.h>
 #include <linux/delay.h>
@@ -194,7 +193,6 @@ enum {
 					  PDC_TIMER_MASK_INT,
 };
 
-#define ECC_ERASE_BUF_SZ (128 * 1024)
 
 struct pdc_port_priv {
 	u8			dimm_buf[(ATA_PRD_SZ * ATA_MAX_PRD) + 512];
@@ -273,8 +271,9 @@ static struct ata_port_operations pdc_20621_ops = {
 static const struct ata_port_info pdc_port_info[] = {
 	/* board_20621 */
 	{
-		.flags		= ATA_FLAG_SATA | ATA_FLAG_NO_ATAPI |
-				  ATA_FLAG_PIO_POLLING,
+		.flags		= ATA_FLAG_SATA | ATA_FLAG_NO_LEGACY |
+				  ATA_FLAG_SRST | ATA_FLAG_MMIO |
+				  ATA_FLAG_NO_ATAPI | ATA_FLAG_PIO_POLLING,
 		.pio_mask	= ATA_PIO4,
 		.mwdma_mask	= ATA_MWDMA2,
 		.udma_mask	= ATA_UDMA6,
@@ -301,6 +300,11 @@ static int pdc_port_start(struct ata_port *ap)
 {
 	struct device *dev = ap->host->dev;
 	struct pdc_port_priv *pp;
+	int rc;
+
+	rc = ata_port_start(ap);
+	if (rc)
+		return rc;
 
 	pp = devm_kzalloc(dev, sizeof(*pp), GFP_KERNEL);
 	if (!pp)
@@ -834,7 +838,8 @@ static irqreturn_t pdc20621_interrupt(int irq, void *dev_instance)
 			ap = host->ports[port_no];
 		tmp = mask & (1 << i);
 		VPRINTK("seq %u, port_no %u, ap %p, tmp %x\n", i, port_no, ap, tmp);
-		if (tmp && ap) {
+		if (tmp && ap &&
+		    !(ap->flags & ATA_FLAG_DISABLED)) {
 			struct ata_queued_cmd *qc;
 
 			qc = ata_qc_from_tag(ap, ap->link.active_tag);
@@ -920,7 +925,7 @@ static void pdc_error_handler(struct ata_port *ap)
 	if (!(ap->pflags & ATA_PFLAG_FROZEN))
 		pdc_reset_port(ap);
 
-	ata_sff_error_handler(ap);
+	ata_std_error_handler(ap);
 }
 
 static void pdc_post_internal_cmd(struct ata_queued_cmd *qc)
@@ -1275,6 +1280,7 @@ static unsigned int pdc20621_dimm_init(struct ata_host *host)
 {
 	int speed, size, length;
 	u32 addr, spd0, pci_status;
+	u32 tmp = 0;
 	u32 time_period = 0;
 	u32 tcount = 0;
 	u32 ticks = 0;
@@ -1389,17 +1395,14 @@ static unsigned int pdc20621_dimm_init(struct ata_host *host)
 	pdc20621_i2c_read(host, PDC_DIMM0_SPD_DEV_ADDRESS,
 			  PDC_DIMM_SPD_TYPE, &spd0);
 	if (spd0 == 0x02) {
-		void *buf;
 		VPRINTK("Start ECC initialization\n");
 		addr = 0;
 		length = size * 1024 * 1024;
-		buf = kzalloc(ECC_ERASE_BUF_SZ, GFP_KERNEL);
 		while (addr < length) {
-			pdc20621_put_to_dimm(host, buf, addr,
-					     ECC_ERASE_BUF_SZ);
-			addr += ECC_ERASE_BUF_SZ;
+			pdc20621_put_to_dimm(host, (void *) &tmp, addr,
+					     sizeof(u32));
+			addr += sizeof(u32);
 		}
-		kfree(buf);
 		VPRINTK("Finish ECC initialization\n");
 	}
 	return 0;

@@ -116,75 +116,20 @@ struct ubi_volume_info {
  * struct ubi_device_info - UBI device description data structure.
  * @ubi_num: ubi device number
  * @leb_size: logical eraseblock size on this UBI device
- * @leb_start: starting offset of logical eraseblocks within physical
- *             eraseblocks
  * @min_io_size: minimal I/O unit size
- * @max_write_size: maximum amount of bytes the underlying flash can write at a
- *                  time (MTD write buffer size)
  * @ro_mode: if this device is in read-only mode
  * @cdev: UBI character device major and minor numbers
  *
  * Note, @leb_size is the logical eraseblock size offered by the UBI device.
  * Volumes of this UBI device may have smaller logical eraseblock size if their
  * alignment is not equivalent to %1.
- *
- * The @max_write_size field describes flash write maximum write unit. For
- * example, NOR flash allows for changing individual bytes, so @min_io_size is
- * %1. However, it does not mean than NOR flash has to write data byte-by-byte.
- * Instead, CFI NOR flashes have a write-buffer of, e.g., 64 bytes, and when
- * writing large chunks of data, they write 64-bytes at a time. Obviously, this
- * improves write throughput.
- *
- * Also, the MTD device may have N interleaved (striped) flash chips
- * underneath, in which case @min_io_size can be physical min. I/O size of
- * single flash chip, while @max_write_size can be N * @min_io_size.
- *
- * The @max_write_size field is always greater or equivalent to @min_io_size.
- * E.g., some NOR flashes may have (@min_io_size = 1, @max_write_size = 64). In
- * contrast, NAND flashes usually have @min_io_size = @max_write_size = NAND
- * page size.
  */
 struct ubi_device_info {
 	int ubi_num;
 	int leb_size;
-	int leb_start;
 	int min_io_size;
-	int max_write_size;
 	int ro_mode;
 	dev_t cdev;
-};
-
-/*
- * enum - volume notification types.
- * @UBI_VOLUME_ADDED: volume has been added
- * @UBI_VOLUME_REMOVED: start volume volume
- * @UBI_VOLUME_RESIZED: volume size has been re-sized
- * @UBI_VOLUME_RENAMED: volume name has been re-named
- * @UBI_VOLUME_UPDATED: volume name has been updated
- *
- * These constants define which type of event has happened when a volume
- * notification function is invoked.
- */
-enum {
-	UBI_VOLUME_ADDED,
-	UBI_VOLUME_REMOVED,
-	UBI_VOLUME_RESIZED,
-	UBI_VOLUME_RENAMED,
-	UBI_VOLUME_UPDATED,
-};
-
-/*
- * struct ubi_notification - UBI notification description structure.
- * @di: UBI device description object
- * @vi: UBI volume description object
- *
- * UBI notifiers are called with a pointer to an object of this type. The
- * object describes the notification. Namely, it provides a description of the
- * UBI device and UBI volume the notification informs about.
- */
-struct ubi_notification {
-	struct ubi_device_info di;
-	struct ubi_volume_info vi;
 };
 
 /* UBI descriptor given to users when they open UBI volumes */
@@ -196,12 +141,6 @@ void ubi_get_volume_info(struct ubi_volume_desc *desc,
 struct ubi_volume_desc *ubi_open_volume(int ubi_num, int vol_id, int mode);
 struct ubi_volume_desc *ubi_open_volume_nm(int ubi_num, const char *name,
 					   int mode);
-struct ubi_volume_desc *ubi_open_volume_path(const char *pathname, int mode);
-
-int ubi_register_volume_notifier(struct notifier_block *nb,
-				 int ignore_existing);
-int ubi_unregister_volume_notifier(struct notifier_block *nb);
-
 void ubi_close_volume(struct ubi_volume_desc *desc);
 int ubi_leb_read(struct ubi_volume_desc *desc, int lnum, char *buf, int offset,
 		 int len, int check);

@@ -16,7 +16,6 @@
 #include <linux/list.h>
 #include <linux/timer.h>
 #include <linux/init.h>
-#include <linux/gpio.h>
 #include <linux/sysdev.h>
 #include <linux/serial_core.h>
 #include <linux/platform_device.h>
@@ -48,7 +47,6 @@
 #include <linux/mtd/nand_ecc.h>
 #include <linux/mtd/partitions.h>
 
-#include <plat/gpio-cfg.h>
 #include <plat/clock.h>
 #include <plat/devs.h>
 #include <plat/cpu.h>
@@ -97,7 +95,7 @@ static struct s3c2410_uartcfg jive_uartcfgs[] = {
  * 0x017d0000-0x02bd0000 : cramfs B
  * 0x02bd0000-0x03fd0000 : yaffs
  */
-static struct mtd_partition __initdata jive_imageA_nand_part[] = {
+static struct mtd_partition jive_imageA_nand_part[] = {
 
 #ifdef CONFIG_MACH_JIVE_SHOW_BOOTLOADER
 	/* Don't allow access to the bootloader from linux */
@@ -155,7 +153,7 @@ static struct mtd_partition __initdata jive_imageA_nand_part[] = {
         },
 };
 
-static struct mtd_partition __initdata jive_imageB_nand_part[] = {
+static struct mtd_partition jive_imageB_nand_part[] = {
 
 #ifdef CONFIG_MACH_JIVE_SHOW_BOOTLOADER
 	/* Don't allow access to the bootloader from linux */
@@ -214,7 +212,7 @@ static struct mtd_partition __initdata jive_imageB_nand_part[] = {
         },
 };
 
-static struct s3c2410_nand_set __initdata jive_nand_sets[] = {
+static struct s3c2410_nand_set jive_nand_sets[] = {
 	[0] = {
 		.name           = "flash",
 		.nr_chips       = 1,
@@ -223,7 +221,7 @@ static struct s3c2410_nand_set __initdata jive_nand_sets[] = {
 	},
 };
 
-static struct s3c2410_platform_nand __initdata jive_nand_info = {
+static struct s3c2410_platform_nand jive_nand_info = {
 	/* set taken from osiris nand timings, possibly still conservative */
 	.tacls		= 30,
 	.twrph0		= 55,
@@ -358,7 +356,8 @@ static void jive_lcm_reset(unsigned int set)
 {
 	printk(KERN_DEBUG "%s(%d)\n", __func__, set);
 
-	gpio_set_value(S3C2410_GPG(13), set);
+	s3c2410_gpio_setpin(S3C2410_GPG13, set);
+	s3c2410_gpio_cfgpin(S3C2410_GPG13, S3C2410_GPIO_OUTPUT);
 }
 
 #undef LCD_UPPER_MARGIN
@@ -391,13 +390,13 @@ static struct ili9320_platdata jive_lcm_config = {
 
 static void jive_lcd_spi_chipselect(struct s3c2410_spigpio_info *spi, int cs)
 {
-	gpio_set_value(S3C2410_GPB(7), cs ? 0 : 1);
+	s3c2410_gpio_setpin(S3C2410_GPB7, cs ? 0 : 1);
 }
 
 static struct s3c2410_spigpio_info jive_lcd_spi = {
 	.bus_num	= 1,
-	.pin_clk	= S3C2410_GPG(8),
-	.pin_mosi	= S3C2410_GPB(8),
+	.pin_clk	= S3C2410_GPG8,
+	.pin_mosi	= S3C2410_GPB8,
 	.num_chipselect	= 1,
 	.chip_select	= jive_lcd_spi_chipselect,
 };
@@ -413,13 +412,13 @@ static struct platform_device jive_device_lcdspi = {
 
 static void jive_wm8750_chipselect(struct s3c2410_spigpio_info *spi, int cs)
 {
-	gpio_set_value(S3C2410_GPH(10), cs ? 0 : 1);
+	s3c2410_gpio_setpin(S3C2410_GPH10, cs ? 0 : 1);
 }
 
 static struct s3c2410_spigpio_info jive_wm8750_spi = {
 	.bus_num	= 2,
-	.pin_clk	= S3C2410_GPB(4),
-	.pin_mosi	= S3C2410_GPB(9),
+	.pin_clk	= S3C2410_GPB4,
+	.pin_mosi	= S3C2410_GPB9,
 	.num_chipselect	= 1,
 	.chip_select	= jive_wm8750_chipselect,
 };
@@ -468,7 +467,7 @@ static struct i2c_board_info jive_i2c_devs[] __initdata = {
 /* The platform devices being used. */
 
 static struct platform_device *jive_devices[] __initdata = {
-	&s3c_device_ohci,
+	&s3c_device_usb,
 	&s3c_device_rtc,
 	&s3c_device_wdt,
 	&s3c_device_i2c0,
@@ -480,7 +479,7 @@ static struct platform_device *jive_devices[] __initdata = {
 };
 
 static struct s3c2410_udc_mach_info jive_udc_cfg __initdata = {
-	.vbus_pin	= S3C2410_GPG(1),		/* detect is on GPG1 */
+	.vbus_pin	= S3C2410_GPG1,		/* detect is on GPG1 */
 };
 
 /* Jive power management device */
@@ -530,8 +529,8 @@ static void jive_power_off(void)
 {
 	printk(KERN_INFO "powering system down...\n");
 
-	s3c2410_gpio_setpin(S3C2410_GPC(5), 1);
-	s3c_gpio_cfgpin(S3C2410_GPC(5), S3C2410_GPIO_OUTPUT);
+	s3c2410_gpio_setpin(S3C2410_GPC5, 1);
+	s3c2410_gpio_cfgpin(S3C2410_GPC5, S3C2410_GPIO_OUTPUT);
 }
 
 static void __init jive_machine_init(void)
@@ -631,27 +630,26 @@ static void __init jive_machine_init(void)
 
 	s3c_pm_init();
 
-	/** TODO - check that this is after the cmdline option! */
-	s3c_nand_set_platdata(&jive_nand_info);
+	s3c_device_nand.dev.platform_data = &jive_nand_info;
 
 	/* initialise the spi */
 
-	gpio_request(S3C2410_GPG(13), "lcm reset");
-	gpio_direction_output(S3C2410_GPG(13), 0);
+	s3c2410_gpio_setpin(S3C2410_GPG13, 0);
+	s3c2410_gpio_cfgpin(S3C2410_GPG13, S3C2410_GPIO_OUTPUT);
 
-	gpio_request(S3C2410_GPB(7), "jive spi");
-	gpio_direction_output(S3C2410_GPB(7), 1);
+	s3c2410_gpio_setpin(S3C2410_GPB7, 1);
+	s3c2410_gpio_cfgpin(S3C2410_GPB7, S3C2410_GPIO_OUTPUT);
 
-	s3c2410_gpio_setpin(S3C2410_GPB(6), 0);
-	s3c_gpio_cfgpin(S3C2410_GPB(6), S3C2410_GPIO_OUTPUT);
+	s3c2410_gpio_setpin(S3C2410_GPB6, 0);
+	s3c2410_gpio_cfgpin(S3C2410_GPB6, S3C2410_GPIO_OUTPUT);
 
-	s3c2410_gpio_setpin(S3C2410_GPG(8), 1);
-	s3c_gpio_cfgpin(S3C2410_GPG(8), S3C2410_GPIO_OUTPUT);
+	s3c2410_gpio_setpin(S3C2410_GPG8, 1);
+	s3c2410_gpio_cfgpin(S3C2410_GPG8, S3C2410_GPIO_OUTPUT);
 
 	/* initialise the WM8750 spi */
 
-	gpio_request(S3C2410_GPH(10), "jive wm8750 spi");
-	gpio_direction_output(S3C2410_GPH(10), 1);
+	s3c2410_gpio_setpin(S3C2410_GPH10, 1);
+	s3c2410_gpio_cfgpin(S3C2410_GPH10, S3C2410_GPIO_OUTPUT);
 
 	/* Turn off suspend on both USB ports, and switch the
 	 * selectable USB port to USB device mode. */
@@ -674,7 +672,9 @@ static void __init jive_machine_init(void)
 }
 
 MACHINE_START(JIVE, "JIVE")
-	/* Maintainer: Ben Dooks <ben-linux@fluff.org> */
+	/* Maintainer: Ben Dooks <ben@fluff.org> */
+	.phys_io	= S3C2410_PA_UART,
+	.io_pg_offst	= (((u32)S3C24XX_VA_UART) >> 18) & 0xfffc,
 	.boot_params	= S3C2410_SDRAM_PA + 0x100,
 
 	.init_irq	= s3c24xx_init_irq,

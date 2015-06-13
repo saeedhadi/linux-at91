@@ -23,7 +23,6 @@
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/module.h>
-#include <linux/mtd/nand.h>
 #include <linux/platform_device.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/ads7846.h>
@@ -34,7 +33,7 @@
 #include <linux/gpio_keys.h>
 #include <linux/input.h>
 
-#include <video/atmel_lcdfb.h>
+#include <video/atmel_lcdc.h>
 
 #include <asm/setup.h>
 #include <asm/mach-types.h>
@@ -47,7 +46,6 @@
 #include <mach/hardware.h>
 #include <mach/board.h>
 #include <mach/gpio.h>
-#include <mach/atmel_lcdc.h>
 #include <mach/at91sam9_smc.h>
 #include <mach/at91_shdwc.h>
 
@@ -63,7 +61,7 @@ static void __init ek_map_io(void)
 	/* Setup the LEDs */
 	at91_init_leds(AT91_PIN_PA13, AT91_PIN_PA14);
 
-	/* DBGU on ttyS0. (Rx & Tx only) */
+	/* DGBU on ttyS0. (Rx & Tx only) */
 	at91_register_uart(0, 0, 0);
 
 	/* set serial console to ttyS0 (ie, DBGU) */
@@ -171,6 +169,17 @@ static struct at91_udc_data __initdata ek_udc_data = {
 
 
 /*
+ * MCI (SD/MMC)
+ */
+static struct at91_mmc_data __initdata ek_mmc_data = {
+	.wire4		= 1,
+//	.det_pin	= ... not connected
+//	.wp_pin		= ... not connected
+//	.vcc_pin	= ... not connected
+};
+
+
+/*
  * NAND flash
  */
 static struct mtd_partition __initdata ek_nand_partition[] = {
@@ -198,7 +207,6 @@ static struct atmel_nand_data __initdata ek_nand_data = {
 //	.det_pin	= ... not connected
 	.rdy_pin	= AT91_PIN_PC15,
 	.enable_pin	= AT91_PIN_PC14,
-	.ecc_mode	= NAND_ECC_SOFT,
 	.partition_info	= nand_partitions,
 #if defined(CONFIG_MTD_NAND_ATMEL_BUSWIDTH_16)
 	.bus_width_16	= 1,
@@ -239,10 +247,6 @@ static void __init ek_add_device_nand(void)
 	at91_add_device_nand(&ek_nand_data);
 }
 
-/*
- * SPI related devices
- */
-#if defined(CONFIG_SPI_ATMEL) || defined(CONFIG_SPI_ATMEL_MODULE)
 
 /*
  * ADS7846 Touchscreen
@@ -326,7 +330,7 @@ static struct spi_board_info ek_spi_devices[] = {
 	{
 		.modalias	= "ads7846",
 		.chip_select	= 2,
-		.max_speed_hz	= 125000 * 26,	/* (max sample rate @ 3V) * (cmd + data + overhead) */
+		.max_speed_hz	= 125000 * 16,	/* max sample rate * clocks per sample */
 		.bus_num	= 0,
 		.platform_data	= &ads_info,
 		.irq		= AT91SAM9261_ID_IRQ0,
@@ -353,19 +357,6 @@ static struct spi_board_info ek_spi_devices[] = {
 #endif
 };
 
-#else /* CONFIG_SPI_ATMEL_* */
-/* spi0 and mmc/sd share the same PIO pins: cannot be used at the same time */
-
-/*
- * MCI (SD/MMC)
- * det_pin, wp_pin and vcc_pin are not connected
- */
-static struct at91_mmc_data __initdata ek_mmc_data = {
-	.wire4		= 1,
-};
-
-#endif /* CONFIG_SPI_ATMEL_* */
-
 
 /*
  * LCD Controller
@@ -376,31 +367,31 @@ static struct at91_mmc_data __initdata ek_mmc_data = {
 
 /* STN */
 static struct fb_videomode at91_stn_modes[] = {
-        {
-		.name           = "SP06Q002 @ 75",
-		.refresh        = 75,
-		.xres           = 320,          .yres           = 240,
-		.pixclock       = KHZ2PICOS(1440),
+	{
+		.name		= "SP06Q002 @ 75",
+		.refresh	= 75,
+		.xres		= 320,		.yres		= 240,
+		.pixclock	= KHZ2PICOS(1440),
 
-		.left_margin    = 1,            .right_margin   = 1,
-		.upper_margin   = 0,            .lower_margin   = 0,
-		.hsync_len      = 1,            .vsync_len      = 1,
+		.left_margin	= 1,		.right_margin	= 1,
+		.upper_margin	= 0,		.lower_margin	= 0,
+		.hsync_len	= 1,		.vsync_len	= 1,
 
 		.sync		= FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
-		.vmode          = FB_VMODE_NONINTERLACED,
-        },
+		.vmode		= FB_VMODE_NONINTERLACED,
+	}
 };
 
 static struct fb_monspecs at91fb_default_stn_monspecs = {
-        .manufacturer   = "HIT",
-        .monitor        = "SP06Q002",
+	.manufacturer	= "HIT",
+	.monitor		= "SP06Q002",
 
-        .modedb         = at91_stn_modes,
-        .modedb_len     = ARRAY_SIZE(at91_stn_modes),
-        .hfmin          = 15000,
-        .hfmax          = 64000,
-        .vfmin          = 50,
-        .vfmax          = 150,
+	.modedb			= at91_stn_modes,
+	.modedb_len		= ARRAY_SIZE(at91_stn_modes),
+	.hfmin			= 15000,
+	.hfmax			= 64000,
+	.vfmin			= 50,
+	.vfmax			= 150,
 };
 
 #define AT91SAM9261_DEFAULT_STN_LCDCON2	(ATMEL_LCDC_MEMOR_LITTLE \
@@ -438,7 +429,7 @@ static struct atmel_lcdfb_info __initdata ek_lcdc_data = {
 /* TFT */
 static struct fb_videomode at91_tft_vga_modes[] = {
 	{
-	        .name           = "TX09D50VM1CCA @ 60",
+		.name		= "TX09D50VM1CCA @ 60",
 		.refresh	= 60,
 		.xres		= 240,		.yres		= 320,
 		.pixclock	= KHZ2PICOS(4965),
@@ -449,12 +440,12 @@ static struct fb_videomode at91_tft_vga_modes[] = {
 
 		.sync		= FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
 		.vmode		= FB_VMODE_NONINTERLACED,
-	},
+	}
 };
 
 static struct fb_monspecs at91fb_default_tft_monspecs = {
 	.manufacturer	= "HIT",
-	.monitor        = "TX09D50VM1CCA",
+	.monitor	= "TX09D50VM1CCA",
 
 	.modedb		= at91_tft_vga_modes,
 	.modedb_len	= ARRAY_SIZE(at91_tft_vga_modes),
@@ -465,7 +456,7 @@ static struct fb_monspecs at91fb_default_tft_monspecs = {
 };
 
 #define AT91SAM9261_DEFAULT_TFT_LCDCON2	(ATMEL_LCDC_MEMOR_LITTLE \
-					| ATMEL_LCDC_DISTYPE_TFT    \
+					| ATMEL_LCDC_DISTYPE_TFT \
 					| ATMEL_LCDC_CLKMOD_ALWAYSACTIVE)
 
 static void at91_lcdc_tft_power_control(int on)
@@ -618,6 +609,9 @@ static void __init ek_board_init(void)
 	ek_add_device_buttons();
 	/* LEDs */
 	at91_gpio_leds(ek_leds, ARRAY_SIZE(ek_leds));
+	/* shutdown controller, wakeup button (5 msec low) */
+	at91_sys_write(AT91_SHDW_MR, AT91_SHDW_CPTWK0_(10) | AT91_SHDW_WKMODE0_LOW
+				| AT91_SHDW_RTTWKEN);
 }
 
 #if defined(CONFIG_MACH_AT91SAM9261EK)
@@ -626,6 +620,8 @@ MACHINE_START(AT91SAM9261EK, "Atmel AT91SAM9261-EK")
 MACHINE_START(AT91SAM9G10EK, "Atmel AT91SAM9G10-EK")
 #endif
 	/* Maintainer: Atmel */
+	.phys_io	= AT91_BASE_SYS,
+	.io_pg_offst	= (AT91_VA_BASE_SYS >> 18) & 0xfffc,
 	.boot_params	= AT91_SDRAM_BASE + 0x100,
 	.timer		= &at91sam926x_timer,
 	.map_io		= ek_map_io,

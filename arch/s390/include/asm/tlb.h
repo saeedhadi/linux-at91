@@ -22,7 +22,6 @@
  */
 
 #include <linux/mm.h>
-#include <linux/pagemap.h>
 #include <linux/swap.h>
 #include <asm/processor.h>
 #include <asm/pgalloc.h>
@@ -51,7 +50,8 @@ static inline struct mmu_gather *tlb_gather_mmu(struct mm_struct *mm,
 	struct mmu_gather *tlb = &get_cpu_var(mmu_gathers);
 
 	tlb->mm = mm;
-	tlb->fullmm = full_mm_flush;
+	tlb->fullmm = full_mm_flush || (num_online_cpus() == 1) ||
+		(atomic_read(&mm->mm_users) <= 1 && mm == current->active_mm);
 	tlb->nr_ptes = 0;
 	tlb->nr_pxds = TLB_NR_PTRS;
 	if (tlb->fullmm)
@@ -65,17 +65,16 @@ static inline void tlb_flush_mmu(struct mmu_gather *tlb,
 	if (!tlb->fullmm && (tlb->nr_ptes > 0 || tlb->nr_pxds < TLB_NR_PTRS))
 		__tlb_flush_mm(tlb->mm);
 	while (tlb->nr_ptes > 0)
-		page_table_free_rcu(tlb->mm, tlb->array[--tlb->nr_ptes]);
+		pte_free(tlb->mm, tlb->array[--tlb->nr_ptes]);
 	while (tlb->nr_pxds < TLB_NR_PTRS)
-		crst_table_free_rcu(tlb->mm, tlb->array[tlb->nr_pxds++]);
+		/* pgd_free frees the pointer as region or segment table */
+		pgd_free(tlb->mm, tlb->array[tlb->nr_pxds++]);
 }
 
 static inline void tlb_finish_mmu(struct mmu_gather *tlb,
 				  unsigned long start, unsigned long end)
 {
 	tlb_flush_mmu(tlb, start, end);
-
-	rcu_table_freelist_finish();
 
 	/* keep the page table cache within bounds */
 	check_pgt_cache();
@@ -97,15 +96,14 @@ static inline void tlb_remove_page(struct mmu_gather *tlb, struct page *page)
  * pte_free_tlb frees a pte table and clears the CRSTE for the
  * page table from the tlb.
  */
-static inline void pte_free_tlb(struct mmu_gather *tlb, pgtable_t pte,
-				unsigned long address)
+static inline void pte_free_tlb(struct mmu_gather *tlb, pgtable_t pte)
 {
 	if (!tlb->fullmm) {
 		tlb->array[tlb->nr_ptes++] = pte;
 		if (tlb->nr_ptes >= tlb->nr_pxds)
 			tlb_flush_mmu(tlb, 0, 0);
 	} else
-		page_table_free(tlb->mm, (unsigned long *) pte);
+		pte_free(tlb->mm, pte);
 }
 
 /*
@@ -115,8 +113,7 @@ static inline void pte_free_tlb(struct mmu_gather *tlb, pgtable_t pte,
  * as the pgd. pmd_free_tlb checks the asce_limit against 2GB
  * to avoid the double free of the pmd in this case.
  */
-static inline void pmd_free_tlb(struct mmu_gather *tlb, pmd_t *pmd,
-				unsigned long address)
+static inline void pmd_free_tlb(struct mmu_gather *tlb, pmd_t *pmd)
 {
 #ifdef __s390x__
 	if (tlb->mm->context.asce_limit <= (1UL << 31))
@@ -126,7 +123,7 @@ static inline void pmd_free_tlb(struct mmu_gather *tlb, pmd_t *pmd,
 		if (tlb->nr_ptes >= tlb->nr_pxds)
 			tlb_flush_mmu(tlb, 0, 0);
 	} else
-		crst_table_free(tlb->mm, (unsigned long *) pmd);
+		pmd_free(tlb->mm, pmd);
 #endif
 }
 
@@ -137,8 +134,7 @@ static inline void pmd_free_tlb(struct mmu_gather *tlb, pmd_t *pmd,
  * as the pgd. pud_free_tlb checks the asce_limit against 4TB
  * to avoid the double free of the pud in this case.
  */
-static inline void pud_free_tlb(struct mmu_gather *tlb, pud_t *pud,
-				unsigned long address)
+static inline void pud_free_tlb(struct mmu_gather *tlb, pud_t *pud)
 {
 #ifdef __s390x__
 	if (tlb->mm->context.asce_limit <= (1UL << 42))
@@ -148,7 +144,7 @@ static inline void pud_free_tlb(struct mmu_gather *tlb, pud_t *pud,
 		if (tlb->nr_ptes >= tlb->nr_pxds)
 			tlb_flush_mmu(tlb, 0, 0);
 	} else
-		crst_table_free(tlb->mm, (unsigned long *) pud);
+		pud_free(tlb->mm, pud);
 #endif
 }
 

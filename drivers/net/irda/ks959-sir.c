@@ -118,6 +118,7 @@
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/slab.h>
+#include <linux/kref.h>
 #include <linux/usb.h>
 #include <linux/device.h>
 #include <linux/crc32.h>
@@ -154,7 +155,7 @@ struct ks959_speedparams {
 	__le32 baudrate;	/* baud rate, little endian */
 	__u8 flags;
 	__u8 reserved[3];
-} __packed;
+} __attribute__ ((packed));
 
 #define KS_DATA_5_BITS 0x00
 #define KS_DATA_6_BITS 0x01
@@ -384,12 +385,14 @@ static void ks959_send_irq(struct urb *urb)
 /*
  * Called from net/core when new frame is available.
  */
-static netdev_tx_t ks959_hard_xmit(struct sk_buff *skb,
-					 struct net_device *netdev)
+static int ks959_hard_xmit(struct sk_buff *skb, struct net_device *netdev)
 {
 	struct ks959_cb *kingsun;
 	unsigned int wraplen;
 	int ret = 0;
+
+	if (skb == NULL || netdev == NULL)
+		return -EINVAL;
 
 	netif_stop_queue(netdev);
 
@@ -425,7 +428,7 @@ static netdev_tx_t ks959_hard_xmit(struct sk_buff *skb,
 	dev_kfree_skb(skb);
 	spin_unlock(&kingsun->lock);
 
-	return NETDEV_TX_OK;
+	return ret;
 }
 
 /* Receive callback function */

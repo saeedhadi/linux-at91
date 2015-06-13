@@ -92,18 +92,6 @@
 /* Keep this the last entry.  */
 #define R_390_NUM	61
 
-/* Bits present in AT_HWCAP. */
-#define HWCAP_S390_ESAN3	1
-#define HWCAP_S390_ZARCH	2
-#define HWCAP_S390_STFLE	4
-#define HWCAP_S390_MSA		8
-#define HWCAP_S390_LDISP	16
-#define HWCAP_S390_EIMM		32
-#define HWCAP_S390_DFP		64
-#define HWCAP_S390_HPAGE	128
-#define HWCAP_S390_ETF3EH	256
-#define HWCAP_S390_HIGH_GPRS	512
-
 /*
  * These are used to set parameters in the core dumps.
  */
@@ -155,15 +143,14 @@ extern unsigned int vdso_enabled;
 	} while (0)
 
 #define CORE_DUMP_USE_REGSET
+#define USE_ELF_CORE_DUMP
 #define ELF_EXEC_PAGESIZE	4096
 
 /* This is the location that an ET_DYN program is loaded if exec'ed.  Typical
    use of this is to invoke "./ld.so someprog" to test out a new version of
    the loader.  We need to make sure that it is out of the way of the program
    that it will "exec", and that there is sufficient room for the brk.  */
-
-extern unsigned long randomize_et_dyn(unsigned long base);
-#define ELF_ET_DYN_BASE		(randomize_et_dyn(STACK_TOP / 3 * 2))
+#define ELF_ET_DYN_BASE		(STACK_TOP / 3 * 2)
 
 /* This yields a mask that user programs can use to figure out what
    instruction set this CPU supports. */
@@ -208,8 +195,6 @@ do {								\
 	current->mm->context.noexec == 0;		\
 })
 
-#define STACK_RND_MASK	0x7ffUL
-
 #define ARCH_DLINFO							    \
 do {									    \
 	if (vdso_enabled)						    \
@@ -221,8 +206,5 @@ struct linux_binprm;
 
 #define ARCH_HAS_SETUP_ADDITIONAL_PAGES 1
 int arch_setup_additional_pages(struct linux_binprm *, int);
-
-extern unsigned long arch_randomize_brk(struct mm_struct *mm);
-#define arch_randomize_brk arch_randomize_brk
 
 #endif

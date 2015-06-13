@@ -2,6 +2,7 @@
  *  Board-specific setup code for the AT91SAM9M10G45 Evaluation Kit family
  *
  *  Covers: * AT91SAM9G45-EKES  board
+ *          * AT91SAM9M10-EKES  board
  *          * AT91SAM9M10G45-EK board
  *
  *  Copyright (C) 2009 Atmel Corporation.
@@ -17,7 +18,6 @@
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/module.h>
-#include <linux/mtd/nand.h>
 #include <linux/platform_device.h>
 #include <linux/spi/spi.h>
 #include <linux/fb.h>
@@ -26,12 +26,9 @@
 #include <linux/leds.h>
 #include <linux/clk.h>
 #include <linux/atmel-mci.h>
-#include <linux/delay.h>
 
 #include <mach/hardware.h>
-#include <video/atmel_lcdfb.h>
-#include <media/soc_camera.h>
-#include <media/atmel-isi.h>
+#include <video/atmel_lcdc.h>
 
 #include <asm/setup.h>
 #include <asm/mach-types.h>
@@ -41,9 +38,9 @@
 #include <asm/mach/map.h>
 #include <asm/mach/irq.h>
 
+#include <mach/hardware.h>
 #include <mach/board.h>
 #include <mach/gpio.h>
-#include <mach/atmel_lcdc.h>
 #include <mach/at91sam9_smc.h>
 #include <mach/at91_shdwc.h>
 
@@ -110,6 +107,7 @@ static struct mci_platform_data __initdata mci0_data = {
 	.slot[0] = {
 		.bus_width	= 4,
 		.detect_pin	= AT91_PIN_PD10,
+		.wp_pin		= -1,
 	},
 };
 
@@ -159,9 +157,8 @@ static struct atmel_nand_data __initdata ek_nand_data = {
 	.cle		= 22,
 	.rdy_pin	= AT91_PIN_PC8,
 	.enable_pin	= AT91_PIN_PC14,
-	.ecc_mode	= NAND_ECC_SOFT,
 	.partition_info	= nand_partitions,
-#if defined(CONFIG_MTD_NAND_ATMEL_BUSWIDTH_16)
+#if defined(CONFIG_MTD_NAND_AT91_BUSWIDTH_16)
 	.bus_width_16	= 1,
 #else
 	.bus_width_16	= 0,
@@ -200,95 +197,6 @@ static void __init ek_add_device_nand(void)
 	at91_add_device_nand(&ek_nand_data);
 }
 
-/*
- *  ISI
- */
-#if defined(CONFIG_VIDEO_ATMEL_ISI) || defined(CONFIG_VIDEO_ATMEL_ISI_MODULE)
-static struct isi_platform_data __initdata isi_data = {
-	.frate		= ISI_CFG1_FRATE_CAPTURE_ALL,
-	.has_emb_sync	= 0,
-	.emb_crc_sync = 0,
-	.hsync_act_low = 0,
-	.vsync_act_low = 0,
-	.pclk_act_falling = 0,
-	/* to use codec and preview path simultaneously */
-	.isi_full_mode = 1,
-	.data_width_flags = ISI_DATAWIDTH_8 | ISI_DATAWIDTH_10,
-};
-
-static void __init isi_set_clk(void)
-{
-	struct clk *pck1;
-	struct clk *plla;
-
-	pck1 = clk_get(NULL, "pck1");
-	plla = clk_get(NULL, "plla");
-
-	clk_set_parent(pck1, plla);
-	clk_set_rate(pck1, 25000000);
-	clk_enable(pck1);
-}
-#else
-static void __init isi_set_clk(void) {}
-
-static struct isi_platform_data __initdata isi_data;
-#endif
-
-/*
- * soc-camera OV2640
- */
-#if defined(CONFIG_SOC_CAMERA_OV2640)
-static unsigned long isi_camera_query_bus_param(struct soc_camera_link *link)
-{
-	/* ISI board for ek using default 8-bits connection */
-	return SOCAM_DATAWIDTH_8;
-}
-
-static int i2c_camera_power(struct device *dev, int on)
-{
-	/* enable or disable the camera */
-	pr_debug("%s: %s the camera\n", __func__, on ? "ENABLE" : "DISABLE");
-	at91_set_gpio_output(AT91_PIN_PD13, on ? 0 : 1);
-
-	if (!on)
-		goto out;
-
-	/* If enabled, give a reset impulse */
-	at91_set_gpio_output(AT91_PIN_PD12, 0);
-	msleep(20);
-	at91_set_gpio_output(AT91_PIN_PD12, 1);
-	msleep(100);
-
-out:
-	return 0;
-}
-
-static struct i2c_board_info i2c_camera = {
-	I2C_BOARD_INFO("ov2640", 0x30),
-};
-
-static struct soc_camera_link iclink_ov2640 = {
-	.bus_id		= 0,
-	.board_info	= &i2c_camera,
-	.i2c_adapter_id	= 0,
-	.power		= i2c_camera_power,
-	.query_bus_param	= isi_camera_query_bus_param,
-};
-
-static struct platform_device isi_ov2640 = {
-	.name	= "soc-camera-pdrv",
-	.id	= 0,
-	.dev	= {
-		.platform_data = &iclink_ov2640,
-	},
-};
-
-static struct platform_device *devices[] __initdata = {
-	&isi_ov2640,
-};
-#else
-static struct platform_device *devices[] __initdata = {};
-#endif
 
 /*
  * LCD Controller
@@ -329,7 +237,7 @@ static struct fb_monspecs at91fb_default_monspecs = {
 /* Driver datas */
 static struct atmel_lcdfb_info __initdata ek_lcdc_data = {
 	.lcdcon_is_backlight		= true,
-	.default_bpp			= 32,
+	.default_bpp			= 16,
 	.default_dmacon			= ATMEL_LCDC_DMAEN,
 	.default_lcdcon2		= AT91SAM9G45_DEFAULT_LCDCON2,
 	.default_monspecs		= &at91fb_default_monspecs,
@@ -346,9 +254,14 @@ static struct atmel_lcdfb_info __initdata ek_lcdc_data;
  * Touchscreen
  */
 static struct at91_tsadcc_data ek_tsadcc_data = {
+#if defined(CONFIG_MACH_AT91SAM9M10G45EK)
+	.adc_clock		= 800000,
+	.ts_sample_hold_time	= 0x04,
+#else
 	.adc_clock		= 300000,
-	.pendet_debounce	= 0x0d,
 	.ts_sample_hold_time	= 0x0a,
+#endif
+	.pendet_debounce	= 0x0d,
 };
 
 
@@ -504,11 +417,6 @@ static void __init ek_board_init(void)
 	ek_add_device_nand();
 	/* I2C */
 	at91_add_device_i2c(0, NULL, 0);
-	/* ISI */
-	platform_add_devices(devices, ARRAY_SIZE(devices));
-	isi_set_clk();
-	at91_add_device_isi(&isi_data);
-
 	/* LCD Controller */
 	at91_add_device_lcdc(&ek_lcdc_data);
 	/* Touch Screen */
@@ -522,8 +430,17 @@ static void __init ek_board_init(void)
 	at91_pwm_leds(ek_pwm_led, ARRAY_SIZE(ek_pwm_led));
 }
 
+
+#if defined(CONFIG_MACH_AT91SAM9G45EKES)
+MACHINE_START(AT91SAM9G45EKES, "Atmel AT91SAM9G45-EKES")
+#elif defined(CONFIG_MACH_AT91SAM9M10EKES)
+MACHINE_START(AT91SAM9M10EKES, "Atmel AT91SAM9M10-EKES")
+#else
 MACHINE_START(AT91SAM9M10G45EK, "Atmel AT91SAM9M10G45-EK")
+#endif
 	/* Maintainer: Atmel */
+	.phys_io	= AT91_BASE_SYS,
+	.io_pg_offst	= (AT91_VA_BASE_SYS >> 18) & 0xfffc,
 	.boot_params	= AT91_SDRAM_BASE + 0x100,
 	.timer		= &at91sam926x_timer,
 	.map_io		= ek_map_io,

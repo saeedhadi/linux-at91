@@ -1,9 +1,8 @@
+sms1xxx-objs := smscoreapi.o sms-cards.o
 
-smsmdtv-objs := smscoreapi.o sms-cards.o smsendian.o smsir.o
-
-obj-$(CONFIG_SMS_SIANO_MDTV) += smsmdtv.o smsdvb.o
-obj-$(CONFIG_SMS_USB_DRV) += smsusb.o
-obj-$(CONFIG_SMS_SDIO_DRV) += smssdio.o
+obj-$(CONFIG_DVB_SIANO_SMS1XXX) += sms1xxx.o
+obj-$(CONFIG_DVB_SIANO_SMS1XXX) += smsusb.o
+obj-$(CONFIG_DVB_SIANO_SMS1XXX) += smsdvb.o
 
 EXTRA_CFLAGS += -Idrivers/media/dvb/dvb-core
 

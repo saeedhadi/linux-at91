@@ -13,7 +13,6 @@
 #include <linux/device.h>
 #include <linux/module.h>
 #include <linux/errno.h>
-#include <linux/slab.h>
 #include <linux/string.h>
 #include "base.h"
 
@@ -99,7 +98,7 @@ EXPORT_SYMBOL_GPL(driver_find_device);
  * @attr: driver attribute descriptor.
  */
 int driver_create_file(struct device_driver *drv,
-		       const struct driver_attribute *attr)
+		       struct driver_attribute *attr)
 {
 	int error;
 	if (drv)
@@ -116,7 +115,7 @@ EXPORT_SYMBOL_GPL(driver_create_file);
  * @attr: driver attribute descriptor.
  */
 void driver_remove_file(struct device_driver *drv,
-			const struct driver_attribute *attr)
+			struct driver_attribute *attr)
 {
 	if (drv)
 		sysfs_remove_file(&drv->p->kobj, &attr->attr);
@@ -182,7 +181,7 @@ void put_driver(struct device_driver *drv)
 EXPORT_SYMBOL_GPL(put_driver);
 
 static int driver_add_groups(struct device_driver *drv,
-			     const struct attribute_group **groups)
+			     struct attribute_group **groups)
 {
 	int error = 0;
 	int i;
@@ -202,7 +201,7 @@ static int driver_add_groups(struct device_driver *drv,
 }
 
 static void driver_remove_groups(struct device_driver *drv,
-				 const struct attribute_group **groups)
+				 struct attribute_group **groups)
 {
 	int i;
 
@@ -237,7 +236,7 @@ int driver_register(struct device_driver *drv)
 		put_driver(other);
 		printk(KERN_ERR "Error: Driver '%s' is already registered, "
 			"aborting...\n", drv->name);
-		return -EBUSY;
+		return -EEXIST;
 	}
 
 	ret = bus_add_driver(drv);

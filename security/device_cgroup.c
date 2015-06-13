@@ -10,7 +10,6 @@
 #include <linux/list.h>
 #include <linux/uaccess.h>
 #include <linux/seq_file.h>
-#include <linux/slab.h>
 #include <linux/rcupdate.h>
 #include <linux/mutex.h>
 
@@ -62,8 +61,7 @@ static inline struct dev_cgroup *task_devcgroup(struct task_struct *task)
 struct cgroup_subsys devices_subsys;
 
 static int devcgroup_can_attach(struct cgroup_subsys *ss,
-		struct cgroup *new_cgroup, struct task_struct *task,
-		bool threadgroup)
+		struct cgroup *new_cgroup, struct task_struct *task)
 {
 	if (current != task && !capable(CAP_SYS_ADMIN))
 			return -EPERM;
@@ -470,7 +468,7 @@ struct cgroup_subsys devices_subsys = {
 	.name = "devices",
 	.can_attach = devcgroup_can_attach,
 	.create = devcgroup_create,
-	.destroy = devcgroup_destroy,
+	.destroy  = devcgroup_destroy,
 	.populate = devcgroup_populate,
 	.subsys_id = devices_subsys_id,
 };
@@ -492,7 +490,7 @@ int devcgroup_inode_permission(struct inode *inode, int mask)
 
 	list_for_each_entry_rcu(wh, &dev_cgroup->whitelist, list) {
 		if (wh->type & DEV_ALL)
-			goto found;
+			goto acc_check;
 		if ((wh->type & DEV_BLOCK) && !S_ISBLK(inode->i_mode))
 			continue;
 		if ((wh->type & DEV_CHAR) && !S_ISCHR(inode->i_mode))
@@ -501,12 +499,11 @@ int devcgroup_inode_permission(struct inode *inode, int mask)
 			continue;
 		if (wh->minor != ~0 && wh->minor != iminor(inode))
 			continue;
-
+acc_check:
 		if ((mask & MAY_WRITE) && !(wh->access & ACC_WRITE))
 			continue;
 		if ((mask & MAY_READ) && !(wh->access & ACC_READ))
 			continue;
-found:
 		rcu_read_unlock();
 		return 0;
 	}
@@ -530,7 +527,7 @@ int devcgroup_inode_mknod(int mode, dev_t dev)
 
 	list_for_each_entry_rcu(wh, &dev_cgroup->whitelist, list) {
 		if (wh->type & DEV_ALL)
-			goto found;
+			goto acc_check;
 		if ((wh->type & DEV_BLOCK) && !S_ISBLK(mode))
 			continue;
 		if ((wh->type & DEV_CHAR) && !S_ISCHR(mode))
@@ -539,10 +536,9 @@ int devcgroup_inode_mknod(int mode, dev_t dev)
 			continue;
 		if (wh->minor != ~0 && wh->minor != MINOR(dev))
 			continue;
-
+acc_check:
 		if (!(wh->access & ACC_MKNOD))
 			continue;
-found:
 		rcu_read_unlock();
 		return 0;
 	}

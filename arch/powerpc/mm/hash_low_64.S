@@ -68,6 +68,9 @@ _GLOBAL(__hash_page_4K)
 	std	r8,STK_PARM(r8)(r1)
 	std	r9,STK_PARM(r9)(r1)
 	
+	/* Add _PAGE_PRESENT to access */
+	ori	r4,r4,_PAGE_PRESENT
+
 	/* Save non-volatile registers.
 	 * r31 will hold "old PTE"
 	 * r30 is "new PTE"
@@ -192,8 +195,8 @@ htab_insert_pte:
 	rldicr	r3,r0,3,63-3		/* r3 = (hash & mask) << 3 */
 
 	/* Call ppc_md.hpte_insert */
-	ld	r6,STK_PARM(r4)(r1)	/* Retrieve new pp bits */
-	mr	r4,r29			/* Retrieve va */
+	ld	r6,STK_PARM(r4)(r1)	/* Retreive new pp bits */
+	mr	r4,r29			/* Retreive va */
 	li	r7,0			/* !bolted, !secondary */
 	li	r8,MMU_PAGE_4K		/* page size */
 	ld	r9,STK_PARM(r9)(r1)	/* segment size */
@@ -215,8 +218,8 @@ _GLOBAL(htab_call_hpte_insert1)
 	rldicr	r3,r0,3,63-3	/* r0 = (~hash & mask) << 3 */
 	
 	/* Call ppc_md.hpte_insert */
-	ld	r6,STK_PARM(r4)(r1)	/* Retrieve new pp bits */
-	mr	r4,r29			/* Retrieve va */
+	ld	r6,STK_PARM(r4)(r1)	/* Retreive new pp bits */
+	mr	r4,r29			/* Retreive va */
 	li	r7,HPTE_V_SECONDARY	/* !bolted, secondary */
 	li	r8,MMU_PAGE_4K		/* page size */
 	ld	r9,STK_PARM(r9)(r1)	/* segment size */
@@ -343,6 +346,9 @@ _GLOBAL(__hash_page_4K)
 	std	r6,STK_PARM(r6)(r1)
 	std	r8,STK_PARM(r8)(r1)
 	std	r9,STK_PARM(r9)(r1)
+
+	/* Add _PAGE_PRESENT to access */
+	ori	r4,r4,_PAGE_PRESENT
 
 	/* Save non-volatile registers.
 	 * r31 will hold "old PTE"
@@ -495,8 +501,8 @@ htab_special_pfn:
 	rldicr	r3,r0,3,63-3		/* r0 = (hash & mask) << 3 */
 
 	/* Call ppc_md.hpte_insert */
-	ld	r6,STK_PARM(r4)(r1)	/* Retrieve new pp bits */
-	mr	r4,r29			/* Retrieve va */
+	ld	r6,STK_PARM(r4)(r1)	/* Retreive new pp bits */
+	mr	r4,r29			/* Retreive va */
 	li	r7,0			/* !bolted, !secondary */
 	li	r8,MMU_PAGE_4K		/* page size */
 	ld	r9,STK_PARM(r9)(r1)	/* segment size */
@@ -522,8 +528,8 @@ _GLOBAL(htab_call_hpte_insert1)
 	rldicr	r3,r0,3,63-3		/* r0 = (~hash & mask) << 3 */
 
 	/* Call ppc_md.hpte_insert */
-	ld	r6,STK_PARM(r4)(r1)	/* Retrieve new pp bits */
-	mr	r4,r29			/* Retrieve va */
+	ld	r6,STK_PARM(r4)(r1)	/* Retreive new pp bits */
+	mr	r4,r29			/* Retreive va */
 	li	r7,HPTE_V_SECONDARY	/* !bolted, secondary */
 	li	r8,MMU_PAGE_4K		/* page size */
 	ld	r9,STK_PARM(r9)(r1)	/* segment size */
@@ -681,6 +687,9 @@ _GLOBAL(__hash_page_64K)
 	std	r8,STK_PARM(r8)(r1)
 	std	r9,STK_PARM(r9)(r1)
 
+	/* Add _PAGE_PRESENT to access */
+	ori	r4,r4,_PAGE_PRESENT
+
 	/* Save non-volatile registers.
 	 * r31 will hold "old PTE"
 	 * r30 is "new PTE"
@@ -813,8 +822,8 @@ ht64_insert_pte:
 	rldicr	r3,r0,3,63-3	/* r0 = (hash & mask) << 3 */
 
 	/* Call ppc_md.hpte_insert */
-	ld	r6,STK_PARM(r4)(r1)	/* Retrieve new pp bits */
-	mr	r4,r29			/* Retrieve va */
+	ld	r6,STK_PARM(r4)(r1)	/* Retreive new pp bits */
+	mr	r4,r29			/* Retreive va */
 	li	r7,0			/* !bolted, !secondary */
 	li	r8,MMU_PAGE_64K
 	ld	r9,STK_PARM(r9)(r1)	/* segment size */
@@ -836,8 +845,8 @@ _GLOBAL(ht64_call_hpte_insert1)
 	rldicr	r3,r0,3,63-3	/* r0 = (~hash & mask) << 3 */
 
 	/* Call ppc_md.hpte_insert */
-	ld	r6,STK_PARM(r4)(r1)	/* Retrieve new pp bits */
-	mr	r4,r29			/* Retrieve va */
+	ld	r6,STK_PARM(r4)(r1)	/* Retreive new pp bits */
+	mr	r4,r29			/* Retreive va */
 	li	r7,HPTE_V_SECONDARY	/* !bolted, secondary */
 	li	r8,MMU_PAGE_64K
 	ld	r9,STK_PARM(r9)(r1)	/* segment size */

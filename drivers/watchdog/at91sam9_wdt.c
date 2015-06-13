@@ -156,8 +156,7 @@ static int at91_wdt_settimeout(unsigned int timeout)
 
 static const struct watchdog_info at91_wdt_info = {
 	.identity	= DRV_NAME,
-	.options	= WDIOF_SETTIMEOUT | WDIOF_KEEPALIVEPING |
-						WDIOF_MAGICCLOSE,
+	.options	= WDIOF_SETTIMEOUT | WDIOF_KEEPALIVEPING,
 };
 
 /*

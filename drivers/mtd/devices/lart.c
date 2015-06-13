@@ -17,7 +17,7 @@
  *           - January 2000
  *
  *    [2] MTD internal API documentation
- *           - http://www.linux-mtd.infradead.org/ 
+ *           - http://www.linux-mtd.infradead.org/tech/
  *
  * Limitations:
  *
@@ -353,7 +353,7 @@ static inline int erase_block (__u32 offset)
    /* put the flash back into command mode */
    write32 (DATA_TO_FLASH (READ_ARRAY),offset);
 
-   /* was the erase successful? */
+   /* was the erase successfull? */
    if ((status & STATUS_ERASE_ERR))
 	 {
 		printk (KERN_WARNING "%s: erase error at address 0x%.8x.\n",module_name,offset);
@@ -393,8 +393,7 @@ static int flash_erase (struct mtd_info *mtd,struct erase_info *instr)
 	* erase range is aligned with the erase size which is in
 	* effect here.
 	*/
-   if (i < 0 || (instr->addr & (mtd->eraseregions[i].erasesize - 1)))
-      return -EINVAL;
+   if (instr->addr & (mtd->eraseregions[i].erasesize - 1)) return (-EINVAL);
 
    /* Remember the erase region we start on */
    first = i;
@@ -410,8 +409,7 @@ static int flash_erase (struct mtd_info *mtd,struct erase_info *instr)
    i--;
 
    /* is the end aligned on a block boundary? */
-   if (i < 0 || ((instr->addr + instr->len) & (mtd->eraseregions[i].erasesize - 1)))
-      return -EINVAL;
+   if ((instr->addr + instr->len) & (mtd->eraseregions[i].erasesize - 1)) return (-EINVAL);
 
    addr = instr->addr;
    len = instr->len;
@@ -508,7 +506,7 @@ static inline int write_dword (__u32 offset,__u32 x)
    /* put the flash back into command mode */
    write32 (DATA_TO_FLASH (READ_ARRAY),offset);
 
-   /* was the write successful? */
+   /* was the write successfull? */
    if ((status & STATUS_PGM_ERR) || read32 (offset) != x)
 	 {
 		printk (KERN_WARNING "%s: write error at address 0x%.8x.\n",module_name,offset);

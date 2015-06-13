@@ -49,7 +49,12 @@ MODULE_LICENSE("GPL");
 MODULE_ALIAS_MISCDEV(WATCHDOG_MINOR);
 MODULE_ALIAS_MISCDEV(TEMP_MINOR);
 
-static int wdrtas_nowayout = WATCHDOG_NOWAYOUT;
+#ifdef CONFIG_WATCHDOG_NOWAYOUT
+static int wdrtas_nowayout = 1;
+#else
+static int wdrtas_nowayout = 0;
+#endif
+
 static atomic_t wdrtas_miscdev_open = ATOMIC_INIT(0);
 static char wdrtas_expect_close;
 
@@ -218,14 +223,16 @@ static void wdrtas_timer_keepalive(void)
  */
 static int wdrtas_get_temperature(void)
 {
-	int result;
+	long result;
 	int temperature = 0;
 
-	result = rtas_get_sensor(WDRTAS_THERMAL_SENSOR, 0, &temperature);
+	result = rtas_call(wdrtas_token_get_sensor_state, 2, 2,
+			   (void *)__pa(&temperature),
+			   WDRTAS_THERMAL_SENSOR, 0);
 
 	if (result < 0)
 		printk(KERN_WARNING "wdrtas: reading the thermal sensor "
-		       "failed: %i\n", result);
+		       "faild: %li\n", result);
 	else
 		temperature = ((temperature * 9) / 5) + 32; /* fahrenheit */
 
@@ -312,7 +319,7 @@ static long wdrtas_ioctl(struct file *file, unsigned int cmd,
 {
 	int __user *argp = (void __user *)arg;
 	int i;
-	static const struct watchdog_info wdinfo = {
+	static struct watchdog_info wdinfo = {
 		.options = WDRTAS_SUPPORTED_MASK,
 		.firmware_version = 0,
 		.identity = "wdrtas",
@@ -542,7 +549,7 @@ static struct notifier_block wdrtas_notifier = {
 /**
  * wdrtas_get_tokens - reads in RTAS tokens
  *
- * returns 0 on success, <0 on failure
+ * returns 0 on succes, <0 on failure
  *
  * wdrtas_get_tokens reads in the tokens for the RTAS calls used in
  * this watchdog driver. It tolerates, if "get-sensor-state" and
@@ -598,7 +605,7 @@ static void wdrtas_unregister_devs(void)
 /**
  * wdrtas_register_devs - registers the misc dev handlers
  *
- * returns 0 on success, <0 on failure
+ * returns 0 on succes, <0 on failure
  *
  * wdrtas_register_devs registers the watchdog and temperature watchdog
  * misc devs
@@ -630,7 +637,7 @@ static int wdrtas_register_devs(void)
 /**
  * wdrtas_init - init function of the watchdog driver
  *
- * returns 0 on success, <0 on failure
+ * returns 0 on succes, <0 on failure
  *
  * registers the file handlers and the reboot notifier
  */

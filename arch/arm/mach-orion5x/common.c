@@ -26,13 +26,12 @@
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
 #include <asm/mach/time.h>
-#include <mach/bridge-regs.h>
 #include <mach/hardware.h>
 #include <mach/orion5x.h>
 #include <plat/ehci-orion.h>
 #include <plat/mv_xor.h>
 #include <plat/orion_nand.h>
-#include <plat/orion_wdt.h>
+#include <plat/orion5x_wdt.h>
 #include <plat/time.h>
 #include "common.h"
 
@@ -489,7 +488,7 @@ static struct platform_device orion5x_xor0_channel = {
 	.dev		= {
 		.dma_mask		= &orion5x_xor_dmamask,
 		.coherent_dma_mask	= DMA_BIT_MASK(64),
-		.platform_data		= &orion5x_xor0_data,
+		.platform_data		= (void *)&orion5x_xor0_data,
 	},
 };
 
@@ -515,7 +514,7 @@ static struct platform_device orion5x_xor1_channel = {
 	.dev		= {
 		.dma_mask		= &orion5x_xor_dmamask,
 		.coherent_dma_mask	= DMA_BIT_MASK(64),
-		.platform_data		= &orion5x_xor1_data,
+		.platform_data		= (void *)&orion5x_xor1_data,
 	},
 };
 
@@ -537,52 +536,16 @@ void __init orion5x_xor_init(void)
 	platform_device_register(&orion5x_xor1_channel);
 }
 
-static struct resource orion5x_crypto_res[] = {
-	{
-		.name   = "regs",
-		.start  = ORION5X_CRYPTO_PHYS_BASE,
-		.end    = ORION5X_CRYPTO_PHYS_BASE + 0xffff,
-		.flags  = IORESOURCE_MEM,
-	}, {
-		.name   = "sram",
-		.start  = ORION5X_SRAM_PHYS_BASE,
-		.end    = ORION5X_SRAM_PHYS_BASE + SZ_8K - 1,
-		.flags  = IORESOURCE_MEM,
-	}, {
-		.name   = "crypto interrupt",
-		.start  = IRQ_ORION5X_CESA,
-		.end    = IRQ_ORION5X_CESA,
-		.flags  = IORESOURCE_IRQ,
-	},
-};
-
-static struct platform_device orion5x_crypto_device = {
-	.name           = "mv_crypto",
-	.id             = -1,
-	.num_resources  = ARRAY_SIZE(orion5x_crypto_res),
-	.resource       = orion5x_crypto_res,
-};
-
-static int __init orion5x_crypto_init(void)
-{
-	int ret;
-
-	ret = orion5x_setup_sram_win();
-	if (ret)
-		return ret;
-
-	return platform_device_register(&orion5x_crypto_device);
-}
 
 /*****************************************************************************
  * Watchdog
  ****************************************************************************/
-static struct orion_wdt_platform_data orion5x_wdt_data = {
+static struct orion5x_wdt_platform_data orion5x_wdt_data = {
 	.tclk			= 0,
 };
 
 static struct platform_device orion5x_wdt_device = {
-	.name		= "orion_wdt",
+	.name		= "orion5x_wdt",
 	.id		= -1,
 	.dev		= {
 		.platform_data	= &orion5x_wdt_data,
@@ -600,11 +563,6 @@ void __init orion5x_wdt_init(void)
 /*****************************************************************************
  * Time handling
  ****************************************************************************/
-void __init orion5x_init_early(void)
-{
-	orion_time_set_base(TIMER_VIRT_BASE);
-}
-
 int orion5x_tclk;
 
 int __init orion5x_find_tclk(void)
@@ -622,9 +580,7 @@ int __init orion5x_find_tclk(void)
 static void orion5x_timer_init(void)
 {
 	orion5x_tclk = orion5x_find_tclk();
-
-	orion_time_init(ORION5X_BRIDGE_VIRT_BASE, BRIDGE_INT_TIMER1_CLR,
-			IRQ_ORION5X_BRIDGE, orion5x_tclk);
+	orion_time_init(IRQ_ORION5X_BRIDGE, orion5x_tclk);
 }
 
 struct sys_timer orion5x_timer = {
@@ -703,14 +659,6 @@ void __init orion5x_init(void)
 		printk(KERN_INFO "Orion: Applying 5281 D0 WFI workaround.\n");
 		disable_hlt();
 	}
-
-	/*
-	 * The 5082/5181l/5182/6082/6082l/6183 have crypto
-	 * while 5180n/5181/5281 don't have crypto.
-	 */
-	if ((dev == MV88F5181_DEV_ID && rev >= MV88F5181L_REV_A0) ||
-	    dev == MV88F5182_DEV_ID || dev == MV88F6183_DEV_ID)
-		orion5x_crypto_init();
 
 	/*
 	 * Register watchdog driver

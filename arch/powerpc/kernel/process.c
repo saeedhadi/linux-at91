@@ -37,7 +37,6 @@
 #include <linux/kernel_stat.h>
 #include <linux/personality.h>
 #include <linux/random.h>
-#include <linux/hw_breakpoint.h>
 
 #include <asm/pgtable.h>
 #include <asm/uaccess.h>
@@ -246,24 +245,6 @@ void discard_lazy_cpu_state(void)
 }
 #endif /* CONFIG_SMP */
 
-#ifdef CONFIG_PPC_ADV_DEBUG_REGS
-void do_send_trap(struct pt_regs *regs, unsigned long address,
-		  unsigned long error_code, int signal_code, int breakpt)
-{
-	siginfo_t info;
-
-	if (notify_die(DIE_DABR_MATCH, "dabr_match", regs, error_code,
-			11, SIGSEGV) == NOTIFY_STOP)
-		return;
-
-	/* Deliver the signal to userspace */
-	info.si_signo = SIGTRAP;
-	info.si_errno = breakpt;	/* breakpoint or watchpoint id */
-	info.si_code = signal_code;
-	info.si_addr = (void __user *)address;
-	force_sig_info(SIGTRAP, &info, current);
-}
-#else	/* !CONFIG_PPC_ADV_DEBUG_REGS */
 void do_dabr(struct pt_regs *regs, unsigned long address,
 		    unsigned long error_code)
 {
@@ -276,6 +257,12 @@ void do_dabr(struct pt_regs *regs, unsigned long address,
 	if (debugger_dabr_match(regs))
 		return;
 
+	/* Clear the DAC and struct entries.  One shot trigger */
+#if defined(CONFIG_BOOKE)
+	mtspr(SPRN_DBCR0, mfspr(SPRN_DBCR0) & ~(DBSR_DAC1R | DBSR_DAC1W
+							| DBCR0_IDM));
+#endif
+
 	/* Clear the DABR */
 	set_dabr(0);
 
@@ -286,83 +273,8 @@ void do_dabr(struct pt_regs *regs, unsigned long address,
 	info.si_addr = (void __user *)address;
 	force_sig_info(SIGTRAP, &info, current);
 }
-#endif	/* CONFIG_PPC_ADV_DEBUG_REGS */
 
 static DEFINE_PER_CPU(unsigned long, current_dabr);
-
-#ifdef CONFIG_PPC_ADV_DEBUG_REGS
-/*
- * Set the debug registers back to their default "safe" values.
- */
-static void set_debug_reg_defaults(struct thread_struct *thread)
-{
-	thread->iac1 = thread->iac2 = 0;
-#if CONFIG_PPC_ADV_DEBUG_IACS > 2
-	thread->iac3 = thread->iac4 = 0;
-#endif
-	thread->dac1 = thread->dac2 = 0;
-#if CONFIG_PPC_ADV_DEBUG_DVCS > 0
-	thread->dvc1 = thread->dvc2 = 0;
-#endif
-	thread->dbcr0 = 0;
-#ifdef CONFIG_BOOKE
-	/*
-	 * Force User/Supervisor bits to b11 (user-only MSR[PR]=1)
-	 */
-	thread->dbcr1 = DBCR1_IAC1US | DBCR1_IAC2US |	\
-			DBCR1_IAC3US | DBCR1_IAC4US;
-	/*
-	 * Force Data Address Compare User/Supervisor bits to be User-only
-	 * (0b11 MSR[PR]=1) and set all other bits in DBCR2 register to be 0.
-	 */
-	thread->dbcr2 = DBCR2_DAC1US | DBCR2_DAC2US;
-#else
-	thread->dbcr1 = 0;
-#endif
-}
-
-static void prime_debug_regs(struct thread_struct *thread)
-{
-	mtspr(SPRN_IAC1, thread->iac1);
-	mtspr(SPRN_IAC2, thread->iac2);
-#if CONFIG_PPC_ADV_DEBUG_IACS > 2
-	mtspr(SPRN_IAC3, thread->iac3);
-	mtspr(SPRN_IAC4, thread->iac4);
-#endif
-	mtspr(SPRN_DAC1, thread->dac1);
-	mtspr(SPRN_DAC2, thread->dac2);
-#if CONFIG_PPC_ADV_DEBUG_DVCS > 0
-	mtspr(SPRN_DVC1, thread->dvc1);
-	mtspr(SPRN_DVC2, thread->dvc2);
-#endif
-	mtspr(SPRN_DBCR0, thread->dbcr0);
-	mtspr(SPRN_DBCR1, thread->dbcr1);
-#ifdef CONFIG_BOOKE
-	mtspr(SPRN_DBCR2, thread->dbcr2);
-#endif
-}
-/*
- * Unless neither the old or new thread are making use of the
- * debug registers, set the debug registers from the values
- * stored in the new thread.
- */
-static void switch_booke_debug_regs(struct thread_struct *new_thread)
-{
-	if ((current->thread.dbcr0 & DBCR0_IDM)
-		|| (new_thread->dbcr0 & DBCR0_IDM))
-			prime_debug_regs(new_thread);
-}
-#else	/* !CONFIG_PPC_ADV_DEBUG_REGS */
-#ifndef CONFIG_HAVE_HW_BREAKPOINT
-static void set_debug_reg_defaults(struct thread_struct *thread)
-{
-	if (thread->dabr) {
-		thread->dabr = 0;
-		set_dabr(0);
-	}
-}
-#endif /* !CONFIG_HAVE_HW_BREAKPOINT */
-#endif	/* CONFIG_PPC_ADV_DEBUG_REGS */
 
 int set_dabr(unsigned long dabr)
 {
@@ -372,15 +284,13 @@ int set_dabr(unsigned long dabr)
 		return ppc_md.set_dabr(dabr);
 
 	/* XXX should we have a CPU_FTR_HAS_DABR ? */
-#ifdef CONFIG_PPC_ADV_DEBUG_REGS
-	mtspr(SPRN_DAC1, dabr);
-#ifdef CONFIG_PPC_47x
-	isync();
-#endif
-#elif defined(CONFIG_PPC_BOOK3S)
+#if defined(CONFIG_PPC64) || defined(CONFIG_6xx)
 	mtspr(SPRN_DABR, dabr);
 #endif
 
+#if defined(CONFIG_BOOKE)
+	mtspr(SPRN_DAC1, dabr);
+#endif
 
 	return 0;
 }
@@ -462,44 +372,17 @@ struct task_struct *__switch_to(struct task_struct *prev,
 
 #endif /* CONFIG_SMP */
 
-#ifdef CONFIG_PPC_ADV_DEBUG_REGS
-	switch_booke_debug_regs(&new->thread);
-#else
-/*
- * For PPC_BOOK3S_64, we use the hw-breakpoint interfaces that would
- * schedule DABR
- */
-#ifndef CONFIG_HAVE_HW_BREAKPOINT
 	if (unlikely(__get_cpu_var(current_dabr) != new->thread.dabr))
 		set_dabr(new->thread.dabr);
-#endif /* CONFIG_HAVE_HW_BREAKPOINT */
-#endif
 
+#if defined(CONFIG_BOOKE)
+	/* If new thread DAC (HW breakpoint) is the same then leave it */
+	if (new->thread.dabr)
+		set_dabr(new->thread.dabr);
+#endif
 
 	new_thread = &new->thread;
 	old_thread = &current->thread;
-
-#if defined(CONFIG_PPC_BOOK3E_64)
-	/* XXX Current Book3E code doesn't deal with kernel side DBCR0,
-	 * we always hold the user values, so we set it now.
-	 *
-	 * However, we ensure the kernel MSR:DE is appropriately cleared too
-	 * to avoid spurrious single step exceptions in the kernel.
-	 *
-	 * This will have to change to merge with the ppc32 code at some point,
-	 * but I don't like much what ppc32 is doing today so there's some
-	 * thinking needed there
-	 */
-	if ((new_thread->dbcr0 | old_thread->dbcr0) & DBCR0_IDM) {
-		u32 dbcr0;
-
-		mtmsr(mfmsr() & ~MSR_DE);
-		isync();
-		dbcr0 = mfspr(SPRN_DBCR0);
-		dbcr0 = (dbcr0 & DBCR0_EDM) | new_thread->dbcr0;
-		mtspr(SPRN_DBCR0, dbcr0);
-	}
-#endif /* CONFIG_PPC64_BOOK3E */
 
 #ifdef CONFIG_PPC64
 	/*
@@ -519,6 +402,7 @@ struct task_struct *__switch_to(struct task_struct *prev,
 
 	account_system_vtime(current);
 	account_process_vtime(current);
+	calculate_steal_time();
 
 	/*
 	 * We can't take a PMU exception inside _switch() since there is a
@@ -630,10 +514,10 @@ void show_regs(struct pt_regs * regs)
 	printk("  CR: %08lx  XER: %08lx\n", regs->ccr, regs->xer);
 	trap = TRAP(regs);
 	if (trap == 0x300 || trap == 0x600)
-#ifdef CONFIG_PPC_ADV_DEBUG_REGS
+#if defined(CONFIG_4xx) || defined(CONFIG_BOOKE)
 		printk("DEAR: "REG", ESR: "REG"\n", regs->dar, regs->dsisr);
 #else
-		printk("DAR: "REG", DSISR: %08lx\n", regs->dar, regs->dsisr);
+		printk("DAR: "REG", DSISR: "REG"\n", regs->dar, regs->dsisr);
 #endif
 	printk("TASK = %p[%d] '%s' THREAD: %p",
 	       current, task_pid_nr(current), current->comm, task_thread_info(current));
@@ -644,7 +528,7 @@ void show_regs(struct pt_regs * regs)
 
 	for (i = 0;  i < 32;  i++) {
 		if ((i % REGS_PER_LINE) == 0)
-			printk("\nGPR%02d: ", i);
+			printk("\n" KERN_INFO "GPR%02d: ", i);
 		printk(REG " ", regs->gpr[i]);
 		if (i == LAST_VOLATILE && !FULL_REGS(regs))
 			break;
@@ -670,13 +554,28 @@ void exit_thread(void)
 
 void flush_thread(void)
 {
+#ifdef CONFIG_PPC64
+	struct thread_info *t = current_thread_info();
+
+	if (test_ti_thread_flag(t, TIF_ABI_PENDING)) {
+		clear_ti_thread_flag(t, TIF_ABI_PENDING);
+		if (test_ti_thread_flag(t, TIF_32BIT))
+			clear_ti_thread_flag(t, TIF_32BIT);
+		else
+			set_ti_thread_flag(t, TIF_32BIT);
+	}
+#endif
+
 	discard_lazy_cpu_state();
 
-#ifdef CONFIG_HAVE_HW_BREAKPOINT
-	flush_ptrace_hw_breakpoint(current);
-#else /* CONFIG_HAVE_HW_BREAKPOINT */
-	set_debug_reg_defaults(&current->thread);
-#endif /* CONFIG_HAVE_HW_BREAKPOINT */
+	if (current->thread.dabr) {
+		current->thread.dabr = 0;
+		set_dabr(0);
+
+#if defined(CONFIG_BOOKE)
+		current->thread.dbcr0 &= ~(DBSR_DAC1R | DBSR_DAC1W);
+#endif
+	}
 }
 
 void
@@ -694,9 +593,6 @@ void prepare_to_copy(struct task_struct *tsk)
 	flush_altivec_to_thread(current);
 	flush_vsx_to_thread(current);
 	flush_spe_to_thread(current);
-#ifdef CONFIG_HAVE_HW_BREAKPOINT
-	flush_ptrace_hw_breakpoint(tsk);
-#endif /* CONFIG_HAVE_HW_BREAKPOINT */
 }
 
 /*
@@ -729,7 +625,7 @@ int copy_thread(unsigned long clone_flags, unsigned long usp,
 		p->thread.regs = childregs;
 		if (clone_flags & CLONE_SETTLS) {
 #ifdef CONFIG_PPC64
-			if (!is_32bit_task())
+			if (!test_thread_flag(TIF_32BIT))
 				childregs->gpr[13] = childregs->gpr[6];
 			else
 #endif
@@ -754,7 +650,7 @@ int copy_thread(unsigned long clone_flags, unsigned long usp,
 	p->thread.ksp_limit = (unsigned long)task_stack_page(p) +
 				_ALIGN_UP(sizeof(struct thread_info), 16);
 
-#ifdef CONFIG_PPC_STD_MMU_64
+#ifdef CONFIG_PPC64
 	if (cpu_has_feature(CPU_FTR_SLB)) {
 		unsigned long sp_vsid;
 		unsigned long llp = mmu_psize_defs[mmu_linear_psize].sllp;
@@ -768,7 +664,6 @@ int copy_thread(unsigned long clone_flags, unsigned long usp,
 		sp_vsid |= SLB_VSID_KERNEL | llp;
 		p->thread.ksp_vsid = sp_vsid;
 	}
-#endif /* CONFIG_PPC_STD_MMU_64 */
 
 	/*
 	 * The PPC64 ABI makes use of a TOC to contain function 
@@ -776,7 +671,6 @@ int copy_thread(unsigned long clone_flags, unsigned long usp,
 	 * to the TOC entry.  The first entry is a pointer to the actual
 	 * function.
  	 */
-#ifdef CONFIG_PPC64
 	kregs->nip = *((unsigned long *)ret_from_fork);
 #else
 	kregs->nip = (unsigned long)ret_from_fork;
@@ -824,7 +718,7 @@ void start_thread(struct pt_regs *regs, unsigned long start, unsigned long sp)
 	regs->nip = start;
 	regs->msr = MSR_USER;
 #else
-	if (!is_32bit_task()) {
+	if (!test_thread_flag(TIF_32BIT)) {
 		unsigned long entry, toc;
 
 		/* start is a relocated pointer to the function descriptor for
@@ -996,7 +890,7 @@ int sys_clone(unsigned long clone_flags, unsigned long usp,
 	if (usp == 0)
 		usp = regs->gpr[1];	/* stack pointer for child */
 #ifdef CONFIG_PPC64
-	if (is_32bit_task()) {
+	if (test_thread_flag(TIF_32BIT)) {
 		parent_tidp = TRUNC_PTR(parent_tidp);
 		child_tidp = TRUNC_PTR(child_tidp);
 	}
@@ -1028,21 +922,21 @@ int sys_execve(unsigned long a0, unsigned long a1, unsigned long a2,
 	int error;
 	char *filename;
 
-	filename = getname((const char __user *) a0);
+	filename = getname((char __user *) a0);
 	error = PTR_ERR(filename);
 	if (IS_ERR(filename))
 		goto out;
 	flush_fp_to_thread(current);
 	flush_altivec_to_thread(current);
 	flush_spe_to_thread(current);
-	error = do_execve(filename,
-			  (const char __user *const __user *) a1,
-			  (const char __user *const __user *) a2, regs);
+	error = do_execve(filename, (char __user * __user *) a1,
+			  (char __user * __user *) a2, regs);
 	putname(filename);
 out:
 	return error;
 }
 
+#ifdef CONFIG_IRQSTACKS
 static inline int valid_irq_stack(unsigned long sp, struct task_struct *p,
 				  unsigned long nbytes)
 {
@@ -1066,6 +960,10 @@ static inline int valid_irq_stack(unsigned long sp, struct task_struct *p,
 	}
 	return 0;
 }
+
+#else
+#define valid_irq_stack(sp, p, nb)	0
+#endif /* CONFIG_IRQSTACKS */
 
 int validate_sp(unsigned long sp, struct task_struct *p,
 		       unsigned long nbytes)
@@ -1116,13 +1014,9 @@ void show_stack(struct task_struct *tsk, unsigned long *stack)
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
 	int curr_frame = current->curr_ret_stack;
 	extern void return_to_handler(void);
-	unsigned long rth = (unsigned long)return_to_handler;
-	unsigned long mrth = -1;
+	unsigned long addr = (unsigned long)return_to_handler;
 #ifdef CONFIG_PPC64
-	extern void mod_return_to_handler(void);
-	rth = *(unsigned long *)rth;
-	mrth = (unsigned long)mod_return_to_handler;
-	mrth = *(unsigned long *)mrth;
+	addr = *(unsigned long*)addr;
 #endif
 #endif
 
@@ -1148,7 +1042,7 @@ void show_stack(struct task_struct *tsk, unsigned long *stack)
 		if (!firstframe || ip != lr) {
 			printk("["REG"] ["REG"] %pS", sp, ip, (void *)ip);
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
-			if ((ip == rth || ip == mrth) && curr_frame >= 0) {
+			if (ip == addr && curr_frame >= 0) {
 				printk(" (%pS)",
 				       (void *)current->ret_stack[curr_frame].ret);
 				curr_frame--;
@@ -1200,17 +1094,19 @@ void ppc64_runlatch_on(void)
 	}
 }
 
-void __ppc64_runlatch_off(void)
+void ppc64_runlatch_off(void)
 {
 	unsigned long ctrl;
 
-	HMT_medium();
+	if (cpu_has_feature(CPU_FTR_CTRL) && test_thread_flag(TIF_RUNLATCH)) {
+		HMT_medium();
 
-	clear_thread_flag(TIF_RUNLATCH);
+		clear_thread_flag(TIF_RUNLATCH);
 
-	ctrl = mfspr(SPRN_CTRLF);
-	ctrl &= ~CTRL_RUNLATCH;
-	mtspr(SPRN_CTRLT, ctrl);
+		ctrl = mfspr(SPRN_CTRLF);
+		ctrl &= ~CTRL_RUNLATCH;
+		mtspr(SPRN_CTRLT, ctrl);
+	}
 }
 #endif
 
@@ -1218,11 +1114,11 @@ void __ppc64_runlatch_off(void)
 
 static struct kmem_cache *thread_info_cache;
 
-struct thread_info *alloc_thread_info_node(struct task_struct *tsk, int node)
+struct thread_info *alloc_thread_info(struct task_struct *tsk)
 {
 	struct thread_info *ti;
 
-	ti = kmem_cache_alloc_node(thread_info_cache, GFP_KERNEL, node);
+	ti = kmem_cache_alloc(thread_info_cache, GFP_KERNEL);
 	if (unlikely(ti == NULL))
 		return NULL;
 #ifdef CONFIG_DEBUG_STACK_USAGE
@@ -1267,22 +1163,7 @@ static inline unsigned long brk_rnd(void)
 
 unsigned long arch_randomize_brk(struct mm_struct *mm)
 {
-	unsigned long base = mm->brk;
-	unsigned long ret;
-
-#ifdef CONFIG_PPC_STD_MMU_64
-	/*
-	 * If we are using 1TB segments and we are allowed to randomise
-	 * the heap, we can put it above 1TB so it is backed by a 1TB
-	 * segment. Otherwise the heap will be in the bottom 1TB
-	 * which always uses 256MB segments and this may result in a
-	 * performance penalty.
-	 */
-	if (!is_32bit_task() && (mmu_highuser_ssize == MMU_SEGSIZE_1T))
-		base = max_t(unsigned long, mm->brk, 1UL << SID_SHIFT_1T);
-#endif
-
-	ret = PAGE_ALIGN(base + brk_rnd());
+	unsigned long ret = PAGE_ALIGN(mm->brk + brk_rnd());
 
 	if (ret < mm->brk)
 		return mm->brk;

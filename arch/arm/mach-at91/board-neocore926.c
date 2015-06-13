@@ -24,7 +24,6 @@
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/module.h>
-#include <linux/mtd/nand.h>
 #include <linux/platform_device.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/ads7846.h>
@@ -32,7 +31,7 @@
 #include <linux/gpio_keys.h>
 #include <linux/input.h>
 
-#include <video/atmel_lcdfb.h>
+#include <video/atmel_lcdc.h>
 
 #include <asm/setup.h>
 #include <asm/mach-types.h>
@@ -46,7 +45,6 @@
 #include <mach/hardware.h>
 #include <mach/board.h>
 #include <mach/gpio.h>
-#include <mach/atmel_lcdc.h>
 #include <mach/at91sam9_smc.h>
 
 #include "sam9_smc.h"
@@ -58,7 +56,7 @@ static void __init neocore926_map_io(void)
 	/* Initialize processor: 20 MHz crystal */
 	at91sam9263_initialize(20000000);
 
-	/* DBGU on ttyS0. (Rx & Tx only) */
+	/* DGBU on ttyS0. (Rx & Tx only) */
 	at91_register_uart(0, 0, 0);
 
 	/* USART0 on ttyS1. (Rx, Tx, RTS, CTS) */
@@ -200,9 +198,8 @@ static struct atmel_nand_data __initdata neocore926_nand_data = {
 	.ale			= 21,
 	.cle			= 22,
 	.rdy_pin		= AT91_PIN_PB19,
-	.rdy_pin_active_low	= 1,
+//	.rdy_pin_active_low	= 1,
 	.enable_pin		= AT91_PIN_PD15,
-	.ecc_mode	= NAND_ECC_SOFT,
 	.partition_info		= nand_partitions,
 };
 
@@ -343,7 +340,7 @@ static void __init neocore926_add_device_buttons(void) {}
 /*
  * AC97
  */
-static struct ac97c_platform_data neocore926_ac97_data = {
+static struct atmel_ac97_data neocore926_ac97_data = {
 	.reset_pin	= AT91_PIN_PA13,
 };
 
@@ -390,6 +387,8 @@ static void __init neocore926_board_init(void)
 
 MACHINE_START(NEOCORE926, "ADENEO NEOCORE 926")
 	/* Maintainer: ADENEO */
+	.phys_io	= AT91_BASE_SYS,
+	.io_pg_offst	= (AT91_VA_BASE_SYS >> 18) & 0xfffc,
 	.boot_params	= AT91_SDRAM_BASE + 0x100,
 	.timer		= &at91sam926x_timer,
 	.map_io		= neocore926_map_io,
