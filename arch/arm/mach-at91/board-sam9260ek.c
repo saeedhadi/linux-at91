@@ -108,6 +108,27 @@ static void __init at73c213_set_clk(struct at73c213_board_info *info) {}
  * SPI devices.
  */
 static struct spi_board_info ek_spi_devices[] = {
+
+	{	/* DataFlash chip */
+		.modalias	="spidev",
+		.chip_select	= 0,
+		.max_speed_hz	= 15 * 1000 * 1000,
+		.bus_num	= 1,
+	},
+#ifdef CONFIG_METERING
+	{	/* DataFlash chip */
+		.modalias	="spidev",
+		.chip_select	= 1,
+		.max_speed_hz	= 15 * 1000 * 1000,
+		.bus_num	= 1,
+	},
+	{	/* DataFlash chip */
+		.modalias	="spidev",
+		.chip_select	= 2,
+		.max_speed_hz	= 15 * 1000 * 1000,
+		.bus_num	= 1,
+	},
+#endif
 #if !IS_ENABLED(CONFIG_MMC_ATMELMCI)
 	{	/* DataFlash chip */
 		.modalias	= "mtd_dataflash",
@@ -224,17 +245,72 @@ static struct mci_platform_data __initdata ek_mci0_data = {
  * LEDs
  */
 static struct gpio_led ek_leds[] = {
-	{	/* "bottom" led, green, userled1 to be defined */
-		.name			= "ds5",
-		.gpio			= AT91_PIN_PA6,
+	// {	/* "bottom" led, green, userled1 to be defined */
+	// 	.name			= "ds5",
+	// 	.gpio			= AT91_PIN_PA6,
+	// 	.active_low		= 1,
+	// 	.default_trigger	= "none",
+	// },
+	// {	/* "power" led, yellow */
+	// 	.name			= "ds1",
+	// 	.gpio			= AT91_PIN_PA9,
+	// 	.default_trigger	= "heartbeat",
+	// }
+	{	/* userled1  */
+		.name			= "led1",
+		.gpio			= AT91_PIN_PA9,
 		.active_low		= 1,
 		.default_trigger	= "none",
 	},
-	{	/* "power" led, yellow */
-		.name			= "ds1",
-		.gpio			= AT91_PIN_PA9,
+	{	/* userled2 */
+		.name			= "led2",
+		.gpio			= AT91_PIN_PA10,
+		.active_low		= 1,
+		.default_trigger	= "none",
+	},
+#ifdef CONFIG_METERING
+	{	/* userled3 */
+		.name			= "RelayO",
+		.gpio			= AT91_PIN_PA11,
+		.active_low		= 0,
+		.default_trigger	= "none",
+	},
+	{	/* userled4 */
+		.name			= "RelayC",
+		.gpio			= AT91_PIN_PB17,
+		.active_low		= 0,
+		.default_trigger	= "none",
+	}
+
+,
+	{
+		.name			= "Reset",
+		.gpio			= AT91_PIN_PB31,
+		.active_low		= 1,
+		.default_trigger	= "none",
+	},
+////////////////////////////////////////////////////////
+	{	/* userled4 */
+		.name			= "sim_e",
+		.gpio			= AT91_PIN_PB22,
+		.active_low		= 1,
 		.default_trigger	= "heartbeat",
 	}
+
+,
+	{
+		.name			= "rtc_e",
+		.gpio			= AT91_PIN_PB19,
+		.active_low		= 1,
+		.default_trigger	= "none",
+	},
+	{
+		.name			= "lcd_e",
+		.gpio			= AT91_PIN_PB18,
+		.active_low		= 1,
+		.default_trigger	= "none",
+	}
+#endif
 };
 
 /*
@@ -274,6 +350,70 @@ static struct gpio_keys_button ek_buttons[] = {
 		.active_low	= 1,
 		.wakeup		= 1,
 	}
+#ifdef CONFIG_METERING
+{
+	.gpio		= AT91_PIN_PA28,
+	.code		= BTN_1,
+	.desc		= "Button 1",
+	.active_low	= 1,
+	.wakeup		= 1,
+},
+{
+	.gpio		= AT91_PIN_PA27,
+	.code		= BTN_2,
+	.desc		= "Button 2",
+	.active_low	= 1,
+	.wakeup		= 1,
+},
+{
+	.gpio		= AT91_PIN_PA26,
+	.code		= BTN_3,
+	.desc		= "IRQA",
+	.active_low	= 1,
+	.wakeup		= 1,
+},
+{
+	.gpio		= AT91_PIN_PC15,
+	.code		= BTN_4,
+	.desc		= "IRQB",
+	.active_low	= 1,
+	.wakeup		= 1,
+}
+
+,
+{
+	.gpio		= AT91_PIN_PA25,
+	.code		= BTN_4,
+	.desc		= "Relayfedback",
+	.active_low	= 1,
+	.wakeup		= 1,
+}
+,
+{
+	.gpio		= AT91_PIN_PA24,
+	.code		= BTN_4,
+	.desc		= "PowAC",
+	.active_low	= 1,
+	.wakeup		= 1,
+}
+,
+{
+	.gpio		= AT91_PIN_PA23,
+	.code		= BTN_4,
+	.desc		= "rtc_i",
+	.active_low	= 1,
+	.wakeup		= 1,
+}
+,
+{
+	.gpio		= AT91_PIN_PA29,
+	.code		= BTN_4,
+	.desc		= "revp",
+	.active_low	= 1,
+	.wakeup		= 1,
+}
+#endif
+
 };
 
 static struct gpio_keys_platform_data ek_button_data = {
@@ -296,6 +436,32 @@ static void __init ek_add_device_buttons(void)
 	at91_set_deglitch(AT91_PIN_PA30, 1);
 	at91_set_gpio_input(AT91_PIN_PA31, 1);	/* btn4 */
 	at91_set_deglitch(AT91_PIN_PA31, 1);
+
+#ifdef CONFIG_METERING
+at91_set_gpio_input(AT91_PIN_PA23, 1);	/* btn1 */
+at91_set_deglitch(AT91_PIN_PA23, 1);
+
+at91_set_gpio_input(AT91_PIN_PA25, 1);	/* btn2 */
+at91_set_deglitch(AT91_PIN_PA25, 1);
+
+at91_set_gpio_input(AT91_PIN_PA26, 1);	/* btn3 */
+at91_set_deglitch(AT91_PIN_PA26, 1);
+
+at91_set_gpio_input(AT91_PIN_PA27, 1);	/* btn4 */
+at91_set_deglitch(AT91_PIN_PA27, 1);
+
+at91_set_gpio_input(AT91_PIN_PA24, 1);
+at91_set_deglitch(AT91_PIN_PA24, 1);
+
+at91_set_gpio_input(AT91_PIN_PA29, 1);
+at91_set_deglitch(AT91_PIN_PA29, 1);
+
+at91_set_gpio_input(AT91_PIN_PA28, 1);
+at91_set_deglitch(AT91_PIN_PA28, 1);
+
+at91_set_gpio_input(AT91_PIN_PC15, 1);
+at91_set_deglitch(AT91_PIN_PC15, 1);
+#endif
 
 	platform_device_register(&ek_button_device);
 }

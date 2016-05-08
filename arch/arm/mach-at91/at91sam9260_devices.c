@@ -186,16 +186,16 @@ void __init at91_add_device_eth(struct macb_platform_data *data)
 	at91_set_A_periph(AT91_PIN_PA21, 0);	/* EMDIO */
 	at91_set_A_periph(AT91_PIN_PA20, 0);	/* EMDC */
 
-	if (!data->is_rmii) {
-		at91_set_B_periph(AT91_PIN_PA28, 0);	/* ECRS */
-		at91_set_B_periph(AT91_PIN_PA29, 0);	/* ECOL */
-		at91_set_B_periph(AT91_PIN_PA25, 0);	/* ERX2 */
-		at91_set_B_periph(AT91_PIN_PA26, 0);	/* ERX3 */
-		at91_set_B_periph(AT91_PIN_PA27, 0);	/* ERXCK */
-		at91_set_B_periph(AT91_PIN_PA23, 0);	/* ETX2 */
-		at91_set_B_periph(AT91_PIN_PA24, 0);	/* ETX3 */
-		at91_set_B_periph(AT91_PIN_PA22, 0);	/* ETXER */
-	}
+	// if (!data->is_rmii) {//ILUM9260 does not support MII mode
+	// 	at91_set_B_periph(AT91_PIN_PA28, 0);	/* ECRS */
+	// 	at91_set_B_periph(AT91_PIN_PA29, 0);	/* ECOL */
+	// 	at91_set_B_periph(AT91_PIN_PA25, 0);	/* ERX2 */
+	// 	at91_set_B_periph(AT91_PIN_PA26, 0);	/* ERX3 */
+	// 	at91_set_B_periph(AT91_PIN_PA27, 0);	/* ERXCK */
+	// 	at91_set_B_periph(AT91_PIN_PA23, 0);	/* ETX2 */
+	// 	at91_set_B_periph(AT91_PIN_PA24, 0);	/* ETX3 */
+	// 	at91_set_B_periph(AT91_PIN_PA22, 0);	/* ETXER */
+	// }
 
 	eth_data = *data;
 	platform_device_register(&at91sam9260_eth_device);
@@ -504,7 +504,11 @@ static struct platform_device at91sam9260_spi1_device = {
 	.num_resources	= ARRAY_SIZE(spi1_resources),
 };
 
+#ifndef CONFIG_METERING
 static const unsigned spi1_standard_cs[4] = { AT91_PIN_PB3, AT91_PIN_PC5, AT91_PIN_PC4, AT91_PIN_PC3 };
+#else
+static const unsigned spi1_standard_cs[4] = { AT91_PIN_PC6, AT91_PIN_PC7, AT91_PIN_PC9, AT91_PIN_PC10 };
+#endif
 
 void __init at91_add_device_spi(struct spi_board_info *devices, int nr_devices)
 {
@@ -871,6 +875,7 @@ static inline void configure_usart0_pins(unsigned pins)
 	at91_set_A_periph(AT91_PIN_PB4, 1);		/* TXD0 */
 	at91_set_A_periph(AT91_PIN_PB5, 0);		/* RXD0 */
 
+#ifndef CONFIG_METERING
 	if (pins & ATMEL_UART_RTS)
 		at91_set_A_periph(AT91_PIN_PB26, 0);	/* RTS0 */
 	if (pins & ATMEL_UART_CTS)
@@ -883,6 +888,7 @@ static inline void configure_usart0_pins(unsigned pins)
 		at91_set_A_periph(AT91_PIN_PB23, 0);	/* DCD0 */
 	if (pins & ATMEL_UART_RI)
 		at91_set_A_periph(AT91_PIN_PB25, 0);	/* RI0 */
+#endif
 }
 
 static struct resource uart1_resources[] = {
@@ -921,11 +927,12 @@ static inline void configure_usart1_pins(unsigned pins)
 {
 	at91_set_A_periph(AT91_PIN_PB6, 1);		/* TXD1 */
 	at91_set_A_periph(AT91_PIN_PB7, 0);		/* RXD1 */
-
+#ifndef CONFIG_METERING
 	if (pins & ATMEL_UART_RTS)
 		at91_set_A_periph(AT91_PIN_PB28, 0);	/* RTS1 */
 	if (pins & ATMEL_UART_CTS)
 		at91_set_A_periph(AT91_PIN_PB29, 0);	/* CTS1 */
+#endif
 }
 
 static struct resource uart2_resources[] = {
@@ -964,11 +971,12 @@ static inline void configure_usart2_pins(unsigned pins)
 {
 	at91_set_A_periph(AT91_PIN_PB8, 1);		/* TXD2 */
 	at91_set_A_periph(AT91_PIN_PB9, 0);		/* RXD2 */
-
+#ifndef CONFIG_METERING
 	if (pins & ATMEL_UART_RTS)
 		at91_set_A_periph(AT91_PIN_PA4, 0);	/* RTS2 */
 	if (pins & ATMEL_UART_CTS)
 		at91_set_A_periph(AT91_PIN_PA5, 0);	/* CTS2 */
+#endif
 }
 
 static struct resource uart3_resources[] = {
@@ -1007,11 +1015,12 @@ static inline void configure_usart3_pins(unsigned pins)
 {
 	at91_set_A_periph(AT91_PIN_PB10, 1);		/* TXD3 */
 	at91_set_A_periph(AT91_PIN_PB11, 0);		/* RXD3 */
-
+#ifndef CONFIG_METERING
 	if (pins & ATMEL_UART_RTS)
 		at91_set_B_periph(AT91_PIN_PC8, 0);	/* RTS3 */
 	if (pins & ATMEL_UART_CTS)
 		at91_set_B_periph(AT91_PIN_PC10, 0);	/* CTS3 */
+#endif
 }
 
 static struct resource uart4_resources[] = {
@@ -1118,14 +1127,15 @@ void __init at91_register_uart(unsigned id, unsigned portnr, unsigned pins)
 			pdev = &at91sam9260_uart3_device;
 			configure_usart3_pins(pins);
 			break;
-		case AT91SAM9260_ID_US4:
-			pdev = &at91sam9260_uart4_device;
-			configure_usart4_pins();
-			break;
-		case AT91SAM9260_ID_US5:
-			pdev = &at91sam9260_uart5_device;
-			configure_usart5_pins();
-			break;
+
+		// case AT91SAM9260_ID_US4:
+		// 	pdev = &at91sam9260_uart4_device;
+		// 	configure_usart4_pins();
+		// 	break;
+		// case AT91SAM9260_ID_US5:
+		// 	pdev = &at91sam9260_uart5_device;
+		// 	configure_usart5_pins();
+		// 	break;
 		default:
 			return;
 	}
